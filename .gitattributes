@@ -1,0 +1,5 @@
+external/slang/windows-x64/release/dxcompiler.dll filter=lfs diff=lfs merge=lfs -text
+external/slang/windows-x64/release/slang.dll filter=lfs diff=lfs merge=lfs -text
+external/slang/windows-x64/release/slangc.exe filter=lfs diff=lfs merge=lfs -text
+external/slang/windows-x64/release/slangd.exe filter=lfs diff=lfs merge=lfs -text
+external/slang/windows-x64/release/slang-glslang.dll filter=lfs diff=lfs merge=lfs -text

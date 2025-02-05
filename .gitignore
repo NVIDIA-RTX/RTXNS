@@ -1,0 +1,15 @@
+build/*
+/bin
+/out
+/.vscode
+/.vs
+/*.zip
+external/slang/windows-x64/release/slang-stdlib.bin
+
+# Temp files from running Python sample.
+/.temp
+__pycache__/
+
+# Generated shaders+weights from SlangPyTraining.
+samples/SlangpyTraining/trained_shaders.cfg
+samples/SlangpyTraining/weights.json
