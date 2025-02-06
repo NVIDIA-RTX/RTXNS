@@ -70,7 +70,7 @@ endif()
 option(DONUT_WITH_ASSIMP "" OFF)
 
 set(RTXNS_BINARY_DIR "${CMAKE_SOURCE_DIR}/bin/$<CONFIG>" CACHE PATH "Output directory for the RTXNS build")
-set(SHADERMAKE_BIN_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/bin")
+set(SHADERMAKE_BIN_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/bin" CACHE STRING "Output directory for the ShaderMake executable")
 set(DONUT_SHADERS_OUTPUT_DIR "${RTXNS_BINARY_DIR}/shaders/framework")
 
 add_subdirectory(external/donut)

@@ -41,11 +41,14 @@ using namespace donut::math;
 #include "NetworkConfig.h"
 #include <donut/shaders/view_cb.h>
 
-static const char* g_windowTitle = "RTXNS Example: Inference of Slangpy Training result (Ground Truth | Trained | Loss )";
+static const char* g_defaultTitle = "RTXNS Example: Showing pretrained model. Run SlangpyTraining.py to train new model";
+static const char* g_loadedTitle = "RTXNS Example: Inference of Slangpy Training result (Ground Truth | Trained)";
+static const char* g_windowTitle = g_defaultTitle;
 
 struct UIData
 {
     bool load = false;
+    bool isPretrained = true;
     std::string fileName;
 };
 
@@ -223,6 +226,10 @@ public:
                 if (network.InitialiseFromJson(nativeFS, m_uiParams->fileName))
                 {
                     m_ModelLoaded = InitializeNetwork(network);
+                    if (!m_uiParams->isPretrained)
+                    {
+                        g_windowTitle = g_loadedTitle;
+                    }
                 }
             }
             m_uiParams->fileName = "";
@@ -376,23 +383,11 @@ public:
     {
         m_uiParams->fileName = fname;
         m_uiParams->load = true;
+        m_uiParams->isPretrained = false;
     }
 
     void buildUI() override
     {
-        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), 0);
-
-        ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        if (ImGui::Button("Load Model"))
-        {
-            std::string fileName;
-            if (app::FileDialog(true, "JSON files\0*.json\0All files\0*.*\0\0", fileName))
-            {
-                load(fileName);
-            }
-        }
-
-        ImGui::End();
     }
 };
 
@@ -435,6 +430,9 @@ int main(int __argc, const char** __argv)
 
     {
         UIData uiData;
+        uiData.fileName = (GetLocalPath("assets/data") / "slangpy-weights.json").generic_string();
+        uiData.load = true;
+
         SimpleTraining example(deviceManager, &uiData);
         UserInterface gui(deviceManager, &uiData);
         for (int i = 1; i < __argc; ++i)
