@@ -22,6 +22,7 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** Public Driver ≥ 572.16
 
 ## Known Issues
+05/30/2025: When updating from v1.0.0 to v1.1.0 is it recommended to delete the cmake cache to avoid build errors.
 
 ## Project structure
 
