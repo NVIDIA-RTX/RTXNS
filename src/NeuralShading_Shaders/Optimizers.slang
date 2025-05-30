@@ -23,8 +23,8 @@ namespace optimizers
     // Adam optimizer 
     struct Adam : IOptimizer
     {
-        RWStructuredBuffer<float> m_moments1;
-        RWStructuredBuffer<float> m_moments2;
+        RWBuffer<float> m_moments1;
+        RWBuffer<float> m_moments2;
         float m_learningRate;
         float m_lossScale;
         float m_beta1;
@@ -33,8 +33,8 @@ namespace optimizers
 
         // Initializes from two moments buffers and optimizations parameters
         __init(
-            RWStructuredBuffer<float> moments1, 
-            RWStructuredBuffer<float> moments2,
+            RWBuffer<float> moments1, 
+            RWBuffer<float> moments2,
             float learningRate, 
             float lossScale,
             float beta1 = ADAM_BETA1,

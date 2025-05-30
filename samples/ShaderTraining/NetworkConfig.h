@@ -37,12 +37,12 @@ struct DirectConstantBufferEntry
 
     // Material props
     float4 baseColor;
-    float specular;
-    float roughness;
-    float metallic;
+    float specular = 0;
+    float roughness = 0;
+    float metallic = 0;
 
     // Alignment
-    float pad;
+    float pad = 0;
 };
 
 struct InferenceConstantBufferEntry : DirectConstantBufferEntry

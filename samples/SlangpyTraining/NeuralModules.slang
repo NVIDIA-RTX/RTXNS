@@ -65,8 +65,8 @@ namespace rtxns
         OutputAct : mlp::IActivation<T, OutputNeurons>
     > : IModule<T, InputNeurons, OutputNeurons>
     {
-        StructuredBuffer<T> parameters;
-        RWStructuredBuffer<T> derivatives; 
+        ByteAddressBuffer parameters;
+        RWByteAddressBuffer derivatives; 
         uint matrixOffsets[NumHiddenLayers + 1];
         uint biasOffsets[NumHiddenLayers + 1];
 
@@ -115,7 +115,7 @@ namespace rtxns
         OutputAct : mlp::IActivation<T, OutputNeurons>
     > : IModule<T, InputNeurons, OutputNeurons>
     {
-        StructuredBuffer<T> parameters;
+        ByteAddressBuffer parameters;
         uint matrixOffsets[NumHiddenLayers + 1];
         uint biasOffsets[NumHiddenLayers + 1];
 

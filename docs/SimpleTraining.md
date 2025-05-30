@@ -1,4 +1,4 @@
-# Simple Training Example
+# RTX Neural Shading: Simple Training Example
 
 ## Purpose
 
@@ -6,23 +6,25 @@ This sample builds on the [Simple Inferencing](SimpleInferencing.md) sample to p
 
 ![Simple Training Output](simple_training.png)
 
-When the executable is built and run, the output shows the original texture on the left, the output of the neural network as it is trained in the middle and finally on the right it shows the (scaled) loss delta between the current trained image and the reference image to show progress. Once fully trained, the loss gradient image should be almost pure grey. A UI allows different transforms to be experimented with as well providing functionality to save and load the network.
+When the executable is built and run, the output shows the original texture on the left, the output of the neural network as it is trained in the middle and finally on the right it shows the (scaled) loss delta between the current trained image and the reference image to show progress. Once fully trained, the loss gradient image should be almost pure gray. A UI allows different transforms to be experimented with as well providing functionality to save and load the network.
 
 ## Training Flow
 
 To create and train a neural network with RTXNS, several stages are needed which will be described in more detail below.
 
-1. Create the host side neural network storage and initialise it
+1. Create the host side neural network storage and initialize it
 
-2. Create a GPU copy of the storage and initialise it with the host copy
+2. Create a device optimal layout and GPU buffer
 
-3. Create auxiliary buffers for loss gradients and the optimiser pass
+3. Convert the host layout network to the device optimal layout on the GPU
 
-4. Run batches of the training shader followed by the optimiser shader
+4. Create auxiliary buffers for loss gradients and the optimizer pass
 
-5. Run the inference shader to generate the output image
+5. Run batches of the training shader followed by the optimizer shader
 
-6. Optionally store the network to a file
+6. Run the inference shader to generate the output image
+
+7. Optionally store the network to a file
 
 ## Network Configuration
 
@@ -42,11 +44,11 @@ After around 10-15s of training on an RTX 4090 GPU, this configuration has gener
 
 ## Application Code
 
-On the host, the setup of the neural network is quite simple. A network architecture struct is populated from `NetworkConfig.h` and used to initialise the network. 
+On the host, the setup of the neural network is quite simple. A network architecture struct is populated from `NetworkConfig.h` and used to initialize the network. 
 
 ### Network Creation
 
-This will allocate a contiguous block of host memory for the weights and biases that is correctly sized for the current GPU and the input network parameters and the data will be initialised from a normalised distribution. 
+This will allocate a contiguous block of host memory for the weights and biases that is correctly sized for the a host layout and the input network parameters and the data will be initialized from a normalized distribution. A device optimal layout for training is also created.
 
 ```
 // Create Network
@@ -60,18 +62,20 @@ netArch.numHiddenLayers = NUM_HIDDEN_LAYERS;
 netArch.biasPrecision = NETWORK_PRECISION;
 netArch.weightPrecision = NETWORK_PRECISION;
 ...
-if (!m_NeuralNetwork->Initialise(netArch, rtxns::MatrixLayout::TrainingOptimal))
+m_NeuralNetwork->Initialise(netArch)
+...
+// Get a device optimized layout
+m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
+
 ```
 
 ### GPU Buffer Allocations
 
-Various GPU buffers are required for training and these need allocating based on the size of the network. The training itself will require float16 parameter buffers and an output gradient buffer which will be consumed in the Adam optimiser pass. The optimiser also uses a float32 version of the parameter buffer to retain precision and 2 identical buffers to store the pass `moments` data.
+Various GPU buffers are required for training and these need allocating based on the size of the network. The training itself will require float16 parameter buffers and an output gradient buffer which will be consumed in the Adam optimizer pass. The optimizer also uses a float32 version of the parameter buffer to retain precision and 2 identical buffers to store the pass `moments` data.
 
 #### Float16 Parameter Buffer
 
-The parameter buffer contains all of the weights and biases for the network stored at a suitable precision, such as float16. It will be used directly in the inferencing and training shaders as input to the CoopVector functions.
-
-The previous network creation code will allocate host-side memory for the parameters and populate it with default weights and biases. Assuming that `rtxns::MatrixLayout::TrainingOptimal` layout was selected, the host-side memory will be suitable for a direct upload to the GPU.
+The previous network creation code will allocate host-side memory for the parameters and populate it with default weights and biases. That is written to the GPU then converted to the device layout `rtxns::MatrixLayout::TrainingOptimal`, which will be used directly in the inferencing and training shaders as input to the CoopVector functions.
 
 There are hard GPU specific requirements on the alignment and size of each layer of weights and biases, but otherwise the layers can be packed as you like. In this sample, we copy all of the data into a contiguous block of GPU memory for simplicity.
 
@@ -79,14 +83,22 @@ There are hard GPU specific requirements on the alignment and size of each layer
 nvrhi::BufferDesc paramsBufferDesc;
 paramsBufferDesc.byteSize = m_NeuralNetwork->GetNetworkParams().size();
 ...
-m_MLPParametersBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 ...
-m_CommandList->writeBuffer(m_MLPParametersBuffer, m_NeuralNetwork->GetNetworkParams().data(), m_NeuralNetwork->GetNetworkParams().size());
+m_CommandList->writeBuffer(m_mlpHostBuffer, m_NeuralNetwork->GetNetworkParams().data(), m_NeuralNetwork->GetNetworkParams().size());
+
+paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+...
+m_mlpDeviceBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+
+// Convert to GPU optimized layout
+m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
+
 ```
 
 #### Float32 Parameter Buffer
 
-This sample uses float16 precision for the weights and biases. The reduced precision helps to improve the performance of the network but at the cost of accuracy. As such, there are several things that are required to ensure the loss of precision does not cause underflow/overflow issues in the gradient and loss calculations. We need to keep a float32 version of the parameter buffer on the GPU to ensure the loss adjustments in the optimiser are done in full 32-bit precision, before being copied back to the reduced 16-bit precision buffer for the training shaders. Therefore, a float32 GPU parameter buffer is also needed.
+This sample uses float16 precision for the weights and biases. The reduced precision helps to improve the performance of the network but at the cost of accuracy. As such, there are several things that are required to ensure the loss of precision does not cause underflow/overflow issues in the gradient and loss calculations. We need to keep a float32 version of the parameter buffer on the GPU to ensure the loss adjustments in the optimizer are done in full 32-bit precision, before being copied back to the reduced 16-bit precision buffer for the training shaders. Therefore, a float32 GPU parameter buffer is also needed.
 
 ```
 paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float); // convert to float
@@ -96,44 +108,41 @@ m_MLPParametersfBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
 #### Gradient Buffer
 
-After the back propagation phase of the training shader, the gradients for each neuron in the network should be stored for use in the optimiser pass. These gradients are stored in a float16 buffer the same size as the parameter buffers.
+After the back propagation phase of the training shader, the gradients for each neuron in the network should be stored for use in the optimizer pass. These gradients are stored in a float16 buffer the same size as the parameter buffers.
 
 ```
 paramsBufferDesc.debugName = "MLPGradientsBuffer";
 paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float16_t);
-paramsBufferDesc.structStride = sizeof(float16_t);
+paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
 m_MLPGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 ```
 
 #### Moments Buffers
 
-The last important buffers to allocate are required for the Adam optimiser phase. These are float32 moment buffers which are again the same size as the parameter buffers.
+The last important buffers to allocate are required for the Adam optimizer phase. These are float32 moment buffers which are again the same size as the parameter buffers.
 
 ```
 paramsBufferDesc.debugName = "MLPMoments1Buffer";
 paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
 paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float);
-paramsBufferDesc.structStride = sizeof(float);
+paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
 m_MLPMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 ...
 paramsBufferDesc.debugName = "MLPMoments2Buffer";
-paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float);
-paramsBufferDesc.structStride = sizeof(float);
 m_MLPMoments2Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 ```
 
 ### Weight and Bias Offsets
 
-After creating the buffers to be used in the shaders, we also need to extract the weights and bias offsets into these buffers which are stored in the constant buffer. These are easily queried from the network layers.
+After creating the buffers to be used in the shaders, we also need to extract the weights and bias offsets on the device layout into these buffers which are stored in the constant buffer. These are easily queried from the network layers.
 
 ```
 NeuralConstants neuralConstants = {};
 
 for (int i = 0; i < NUM_TRANSITIONS; ++i)
 {
-    neuralConstants.weightOffsets[i / 4][i % 4] = m_NeuralNetwork->GetNetworkLayers()[i].weightOffset;
-    neuralConstants.biasOffsets[i / 4][i % 4] = m_NeuralNetwork->GetNetworkLayers()[i].biasOffset;
+    neuralConstants.weightOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].weightOffset;
+    neuralConstants.biasOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].biasOffset;
 }
 ```
 
@@ -184,10 +193,17 @@ m_CommandList->endMarker();
 
 ### Storing the Trained Network
 
-When the `save` button is selected in the UI, the sample will store the trained data to a file by calling `UpdateFromBufferToFile` with the float16 GPU parameter buffer.
+When the `save` button is selected in the UI, the sample will store the trained data to a file by calling `rtxns::HostNetwork::UpdateFromBufferToFile()` with the float16 GPU parameter buffer.
 
 ```
-m_NeuralNetwork->UpdateFromBufferToFile(m_MLPParametersBuffer, m_uiParams->fileName);
+ m_neuralNetwork->UpdateFromBufferToFile(
+    m_mlpHostBuffer,
+    m_mlpDeviceBuffer,
+    m_neuralNetwork->GetNetworkLayout(),
+    m_deviceNetworkLayout,
+    m_uiParams->fileName,
+    GetDevice(),
+    m_commandList);
 ```
 
 ## Shader Code
@@ -217,7 +233,7 @@ The main 3 shaders are: [training](../samples/SimpleTraining/SimpleTraining_Trai
 
 ### Training
 
-The training runs in batches using randomly generated inputs which are passed forward through the network, compared with the ground truth and then the loss gradient is passed backwards through the network before the optimisation pass updates the weights and biases.
+The training runs in batches using randomly generated inputs which are passed forward through the network, compared with the ground truth and then the loss gradient is passed backwards through the network before the optimization pass updates the weights and biases.
 
 The input data is frequency encoded to provide a richer input for the network. This isn't always necessary, but was found to give a 2x performance boost and a quality boost in this case. RTXNS provides some different options for encoding, but this sample uses `EncodeFrequency()`
 
@@ -259,7 +275,7 @@ outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
 outputActivated = rtxns::sigmoid(outputParams);
 ```
 
-The result of the forward pass contains the predicted RGB from the network. This needs comparing against the ground truth to generate the loss gradient. The ground truth is dependant on the UI network transform selector:
+The result of the forward pass contains the predicted RGB from the network. This needs comparing against the ground truth to generate the loss gradient. The ground truth is dependent on the UI network transform selector:
 
 ```
 // Take the output from the neural network as the output color
@@ -298,7 +314,7 @@ lossTexture[lossUV] = float4((predictedRGB - actualRGB) * 0.5 * lossScaleFactor 
 float3 lossGradient = 2.0 * (predictedRGB - actualRGB);
 ```
 
-The loss gradient is vital to the successful training of this model, but as we are working in 16-bit precision it needs scaling to preserve as many bits of precision as possible. The scaling will be removed in the optimisation step.
+The loss gradient is vital to the successful training of this model, but as we are working in 16-bit precision it needs scaling to preserve as many bits of precision as possible. The scaling will be removed in the optimization step.
 
 ```
 // Scale by batch size 
@@ -310,10 +326,10 @@ lossGradient *= LOSS_SCALE;
 CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> lossGradientCV = CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS>(VECTOR_FORMAT(lossGradient[0]), VECTOR_FORMAT(lossGradient[1]), VECTOR_FORMAT(lossGradient[2]));
 ```
 
-To compute the back propagation, we need to call derivative implementations of the activation functions and a backward version of the linear regression. These have been implemented in the `rtxns` namespace and can be easily extended. This will propogate the loss gradient back through the network. 
+To compute the back propagation, we need to call derivative implementations of the activation functions and a backward version of the linear regression. These have been implemented in the `rtxns` namespace and can be easily extended. This will propagate the loss gradient back through the network. 
 
 ```
-// Back-propogation pass, generate the gradients and accumulate the results into memory to be applied in the optimisation pass.
+// Back-propogation pass, generate the gradients and accumulate the results into memory to be applied in the optimization pass.
 CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputGradient;
 CoopVec<VECTOR_FORMAT, HIDDEN_NEURONS> hiddenGradient;
 
@@ -367,9 +383,9 @@ void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)
 }
 ```
 
-The shader code is reasonably simple. The compute shader walks over each parameter in the buffer (which could be a weight or a bias) and calls the optimizer to adjust it. It uses the full 32-bit precision floating point version of the parameter buffer for the gradient descent and once adjusted, stores the value in both the 32-bit precision and 16-bit precision buffers. As previously mentioned, the `LOSS_SCALE` factor used in the training is supplied to the optimiser to restore the precision as needed. The gradients are convert to 32-bit precision floating point and reset at the same time. The reset is important for the next training batch.
+The shader code is reasonably simple. The compute shader walks over each parameter in the buffer (which could be a weight or a bias) and calls the optimizer to adjust it. It uses the full 32-bit precision floating point version of the parameter buffer for the gradient descent and once adjusted, stores the value in both the 32-bit precision and 16-bit precision buffers. As previously mentioned, the `LOSS_SCALE` factor used in the training is supplied to the optimizer to restore the precision as needed. The gradients are convert to 32-bit precision floating point and reset at the same time. The reset is important for the next training batch.
 
-The adam optimzer could be replaced if needed by adding a new algorithm to the Optimizers module.
+The adam optimizer could be replaced if needed by adding a new algorithm to the Optimizers module.
 
 ### Inference
 

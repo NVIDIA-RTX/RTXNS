@@ -1,4 +1,4 @@
-# Quick Start Guide
+# RTX Neural Shading: Quick Start Guide
 
 ## Build steps
 
@@ -16,6 +16,10 @@
    cd build
    cmake ..
    ```
+   To enable DX12 Cooperative Vector set the option `ENABLE_DX12_COOP_VECTOR_PREVIEW` on.
+   ```
+   cmake -DENABLE_DX12_COOP_VECTOR_PREVIEW=ON
+   ```
 
 3. Open build/RtxNeuralShading.sln in Visual Studio and build all projects, or build using the CMake CLI
    
@@ -27,11 +31,19 @@
    
    ```
    bin\Debug\SimpleInferencing.exe
-   ```
+
+5. Each of the samples can be build and launched as either DX12 or Vulkan with the respective commandline: `-dx12` or `-vk` 
 
 ## About
 
-All of the samples use the [Vulkan Cooperative Vector extension](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_NV_cooperative_vector.html) and all the shaders are built using Slang.
+All of the samples are built using Slang and can be compiled to either DX12 or Vulkan using DirectX Preview Agility SDK or Vulkan Cooperative Vector extension respectively. 
+
+- [DirectX Preview Agility SDK](https://devblogs.microsoft.com/directx/directx12agility/).
+- [Vulkan Cooperative Vector extension](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_NV_cooperative_vector.html).
+
+## Driver Requirements
+- Use the DirectX Preview Agility SDK requires a shader model 6.9 preview [driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver)  
+- Vulkan Cooperative Vector extension requires a release [driver](https://www.nvidia.com/en-gb/geforce/drivers) from R570 onwards
 
 ### Samples
 
@@ -51,9 +63,3 @@ All of the samples use the [Vulkan Cooperative Vector extension](https://registr
 
 * [Library](LibraryGuide.md) 
   A guide to using the library / helper functions to create and manage your neural networks.
-  
-  
-  
-  
-  
-  

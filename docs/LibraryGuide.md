@@ -1,23 +1,21 @@
-# Library Usage Start Guide
+# RTX Neural Shading: Library Usage Start Guide
 
 The library is split into 2 main areas - the application side and the shader side. 
 
-The application part of the library contains a suite of helper functions to create neural networks, serialize them to/from disk, change their precision and layout as well allocate and destroy the required backing storage. These utilise the `nvrhi` SDK to provide a graphics agnostic interface, but can easily be changed to suit a different engine.
+The application part of the library contains a suite of helper functions to create neural networks, serialize them to/from disk, change their precision and layout as well allocate and destroy the required backing storage. These utilize the `nvrhi` SDK to provide a graphics agnostic interface, but can easily be changed to suit a different engine.
 
 The shader part of the library contains the necessary Slang helper functions needed for training and running inference from a small neural network.
 
 ## Application Code
 
-The main utility class for creating neural networks is `rtxns::Network` which can be found in `NeuralNetwork.h`. It wraps a CPU allocation for the weights and biases and provides functions to store/load the network to disk as well as manage the matrix layouts and network architecture.
+The main utility classes for creating neural networks can be found in `NeuralNetwork.h`, which contains `rtxns::HostNetwork` and  `rtxns::NetworkUtilities`. `rtxns::HostNetwork` wraps host allocation for the weights and biases with functions to store/load the network to file, where `rtxns::NetworkUtilities` contains functions to convert between a host matrix layout and device optimal matrix layout.
 
-### Managing a Neural Network
-
-The `rtxns::Network`  object must be created and initialised before use. It can be initialised from input parameters describing the network, from a file or from another `rtxns::Network` .
+The `rtxns::HostNetwork`  object must be created and initialized before use. It can be initialized from input parameters describing the network architecture, from a file or from another `rtxns::Network` . In each of these cases the network will be in a host layout (`rtxns::MatrixLayout::RowMajor` or `rtxns::MatrixLayout::ColumnMajor`). 
 
 ```
 // Initialise an empty network from parameters
 nvrhi::IDevice* device = ...
-rtxns::Network neuralNetwork = rtxns::Network(device);
+rtxns::HostNetwork hostNetwork = rtxns::HostNetwork(device);
 
 rtxns::NetworkArchitecture netArch = {};
 netArch.inputNeurons = 2;
@@ -27,15 +25,15 @@ netArch.numHiddenLayers = 3;
 netArch.biasPrecision = rtxns::Precision::f16;
 netArch.weightPrecision = rtxns::Precision::f16;
 
-if (!neuralNetwork.Initialise(netArch, rtxns::MatrixLayout::TrainingOptimal))
+if (!hostNetwork.Initialise(netArch))
     log::error("Failed to create a network from an arch!");
 ```
 
 ```
 // Initialise a network from a file
 nvrhi::IDevice* device = ...
-rtxns::Network neuralNetwork = rtxns::Network(device);
-if (!neuralNetwork.InitialiseFromFile("myNN.bin"))
+rtxns::HostNetwork hostNetwork = rtxns::Network(device);
+if (!hostNetwork.InitialiseFromFile("myNN.bin"))
     log::error("Failed to create a network from myNN.bin!");
 ```
 
@@ -44,25 +42,13 @@ Creating the network will allocate the required host side memory to store the we
 The host weights and biases are correctly sized for a direct copy to the GPU. They are accessed via a network parameters accessor and the offsets are queried from the layer accessor :
 
 ```
-assert(neuralNetwork.GetNetworkLayers().size() == 4);
-weightOffsets = dm::uint4(
-    neuralNetwork.GetNetworkLayers()[0].weightOffset, 
-    neuralNetwork.GetNetworkLayers()[1].weightOffset, 
-    neuralNetwork.GetNetworkLayers()[2].weightOffset, 
-    neuralNetwork.GetNetworkLayers()[3].weightOffset);
-biasOffsets = dm::uint4(
-    neuralNetwork.GetNetworkLayers()[0].biasOffset, 
-    neuralNetwork.GetNetworkLayers()[1].biasOffset, 
-    neuralNetwork.GetNetworkLayers()[2].biasOffset, 
-    neuralNetwork.GetNetworkLayers()[3].biasOffset);
-
 const std::vector<uint8_t>& params = neuralNetwork.GetNetworkParams();
 
 // Copy to GPU buffer
-copy(paramsGPUBuffer, params.data(), params.size());
+copy(hostBuffer, params.data(), params.size());
 ```
 
-The network has the notion of the underlying matrix layout.
+The network has the notion of the underlying matrix layout, these are categorized into either a host layout or a device optimal layout. Note that the host layout can be used on the GPU but may not be as performant as the device optimal layouts.
 
 ```
 enum class MatrixLayout
@@ -74,25 +60,47 @@ enum class MatrixLayout
 };
 ```
 
-`RowMajor` and `ColumnMajor` are both HW agnostic and suitable for storing to a file, where as `InferencingOptimal` and `TrainingOptimal` are opaque HW specific formats that are not guarenteed to be transferrable between GPUs and will often have hardware specific data alignment and padding requirements.
+The host layouts are `rtxns::MatrixLayout::RowMajor` and `rtxns::MatrixLayout::ColumnMajor` as they are both hardware and API agnostic, this makes them suitable for storing a network to a file. The device optimal layouts are `rtxns::MatrixLayout::InferencingOptimal` and `rtxns::MatrixLayout::TrainingOptimal`, which are opaque HW specific formats that are not guaranteed to be transferable between GPUs and APIs and will often have specific data alignment and padding requirements.
 
-The typical lifecycle of a network would start in a `TrainingOptimal` layout whilst trained on the GPU. Once training is complete, it would be written to a file as `RowMajor` so it can be shared between GPUs. When it is finally loaded for inference, the network would be changed to be `InferenceOptimal`. 
+The typical lifecycle of a network would start in a host layout, where it is set to either initial values or loaded from file. This network would then be upload to the GPU and converted into a device optimal layout using `rtxns::NetworkUtilities::ConvertWeights`. `rtxns::MatrixLayout::TrainingOptimal` would be used whilst training the network and again using `rtxns::NetworkUtilities::ConvertWeights` changed to `rtxns::MatrixLayout::InferenceOptimal` when that training is complete. To store the trained network we must convert back to a host layout before writing to a file so it can be shared between GPUs.
 
-To change the layout of the network :
-
-```
-neuralNetwork.ChangeLayout(rtxns::MatrixLayout::TrainingOptimal);
-```
-
-To retrieve the trained GPU parameters and write them to disk :
+To change the layout of the network we first use `rtxns::NetworkUtilities::GetNewMatrixLayout()` to create a network layout of the same architecture as the host that is device optimal. The weight and bias offsets are stored for the device layout and will be passed to the GPU via constant buffer.
 
 ```
-neuralNetwork.UpdateFromBufferToFile(paramsGPUBuffer, fileName);
+// Get a device optimized layout
+rtxns::NetworkLayout deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(neuralNetwork.GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
+
+// Store the device layout offsets 
+weightOffsets = dm::uint4(
+    deviceNetworkLayout.networkLayers[0].weightOffset,
+    deviceNetworkLayout.networkLayers[1].weightOffset,
+    deviceNetworkLayout.networkLayers[2].weightOffset,
+    deviceNetworkLayout.networkLayers[3].weightOffset);
+biasOffsets = dm::uint4(
+    deviceNetworkLayout.networkLayers[0].biasOffset,
+    deviceNetworkLayout.networkLayers[1].biasOffset,
+    deviceNetworkLayout.networkLayers[2].biasOffset,
+    deviceNetworkLayout.networkLayers[3].biasOffset);
+
 ```
+
+After creating device side buffer of `deviceNetworkLayout.networkSize` we then use `rtxns::NetworkUtilities::ConvertWeights()` to convert the host layout to the device optimal layout.
+```
+ConvertWeights(hostNetwork.GetNetworkLayout(),
+    deviceNetworkLayout,
+    hostBuffer,
+    hostOffset,
+    deviceBuffer,
+    deviceOffset,
+    device,
+    commandList);
+```
+The device side buffer is now ready for training. The above steps of `rtxns::NetworkUtilities::GetNewMatrixLayout()` and `rtxns::NetworkUtilities::ConvertWeights()` are required again when changing from `rtxns::MatrixLayout::TrainingOptimal` to `rtxns::MatrixLayout::InferencingOptimal`
+The trained network can also be convert back to a host side layout with `rtxns::NetworkUtilities::ConvertWeights` so it can be written to file. This functionality is wrapped up in `rtxns::HostNetwork::UpdateFromBufferToFile()`.
 
 ### Cooperative Vectors
 
-If the user wants to explore writing their own neural network class, then they should investigate the `ICoopVectorUtils` class in `CoopVector.h` and its usage within the `Network` class described above. It provides an API agnostic interface to the Vulkan Cooperative Vector extension that allows the user to query matrix sizes and convert host data between layouts and supported precisions on the host CPU.
+If the user wants to explore writing their own neural network class, then they should investigate the `ICoopVectorUtils` class in `CoopVector.h` and its usage within the `NeuralNetwork.h` described above. It provides an API agnostic interface to the Vulkan and DX12 Cooperative Vector extension that allows the user to query matrix sizes and convert device data between layouts and supported precisions on the GPU.
 
 ## Shader Code
 
@@ -107,7 +115,7 @@ The `LinearOp` function is used to carry out a forward linear step in a neural n
 ```
 CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
     CoopVec<T, K> ip, 
-    StructuredBuffer<T> matrixBiasBuffer, 
+    ByteAddressBuffer matrixBiasBuffer, 
     uint matrixOffset, 
     int biasOffset, 
     constexpr CoopVecMatrixLayout matrixLayout, 
@@ -120,8 +128,8 @@ The `LinearOp_Backward` function is used to carry out a backwards linear step in
  CoopVec<T, K> LinearOp_Backward<T : __BuiltinFloatingPointType, let M : int, let K : int>(
     CoopVec<T, K> ip, 
     CoopVec<T, M> grad, 
-    StructuredBuffer<T> matrixBiasBuffer, 
-    RWStructuredBuffer<T> matrixBiasBufferDerivative, 
+    ByteAddressBuffer matrixBiasBuffer, 
+    RWByteAddressBuffer matrixBiasBufferDerivative, 
     uint matrixOffset, 
     int biasOffset, 
     constexpr CoopVecMatrixLayout matrixLayout, 
@@ -130,33 +138,33 @@ The `LinearOp_Backward` function is used to carry out a backwards linear step in
 
 #### Differentiable  LinearOps
 
-The second half of this module extends the functionality of coopervative vectors to provide support for Slang's auto differentiation feature as it is not natively supported. 
+The second half of this module extends the functionality of cooperative vectors to provide support for Slang's auto differentiation feature as it is not natively supported. 
 
 The `MatrixBiasBuffer` and `MatrixBiasBufferDifferential` structures inherit Slang's `IDifferentiablePtrType` interface so the matrix buffer and its derivative will support auto differentiation.
 
 ```
-struct MatrixBiasBuffer<T : __BuiltinFloatingPointType> : IDifferentiablePtrType
-{
-    typealias Differential = MatrixBiasBufferDifferential<T>;
+struct MatrixBiasBufferDifferential : IDifferentiablePtrType
+    {
+        typealias Differential = MatrixBiasBufferDifferential;
 
-    __init(RWStructuredBuffer<T> buf) 
-    { 
-        buffer = buf;
-    }
+        __init(RWByteAddressBuffer buf) 
+        { 
+            buffer = buf;
+        }
 
-    RWStructuredBuffer<T> buffer;
+        RWByteAddressBuffer buffer;
 };
 
-struct MatrixBiasBuffer<T : __BuiltinFloatingPointType> : IDifferentiablePtrType
-{
-    typealias Differential = MatrixBiasBufferDifferential<T>;
+struct MatrixBiasBuffer : IDifferentiablePtrType
+    {
+        typealias Differential = MatrixBiasBufferDifferential;
 
-    __init(StructuredBuffer<T> buf) 
-    { 
-        buffer = buf;
-    }
+        __init(ByteAddressBuffer buf) 
+        { 
+            buffer = buf;
+        }
 
-    StructuredBuffer<T> buffer;
+        ByteAddressBuffer buffer;
 };
 ```
 
@@ -165,7 +173,7 @@ Next we have a differentiable version of `LinearOp` where the `matrixBiasBuffer`
 ```
 CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
     CoopVec<T, K> ip, 
-    MatrixBiasBuffer<T> MatrixBiasBuffer, 
+    MatrixBiasBuffer matrixBiasBuffer, 
     uint2 offsets,
     constexpr CoopVecMatrixLayout matrixLayout, 
     constexpr CoopVecComponentType componentType)
@@ -177,7 +185,7 @@ CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int>
 [BackwardDerivativeOf(LinearOp)]
 void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
     inout DifferentialPair<CoopVec<T, K>> ip, 
-    DifferentialPtrPair<MatrixBiasBuffer<T>> MatrixBiasBuffer, 
+    DifferentialPtrPair<MatrixBiasBuffer> MatrixBiasBuffer, 
     uint2 offsets,
     constexpr CoopVecMatrixLayout matrixLayout, 
     constexpr CoopVecComponentType componentType, 
@@ -186,7 +194,7 @@ void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let 
 
 ### Activation Function Module
 
-This module provides implmentations of common activation functions
+This module provides implementations of common activation functions
 
 ```
 struct NoneAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>
@@ -274,8 +282,8 @@ The module contains an implementation of the Adam optimizer algorithm, which add
 ```
 struct Adam : IOptimizer
 {
-    RWStructuredBuffer<float> m_moments1;
-    RWStructuredBuffer<float> m_moments2;
+    RWBuffer<float> m_moments1;
+    RWBuffer<float> m_moments2;
     float m_learningRate;
     float m_lossScale;
     float m_beta1;

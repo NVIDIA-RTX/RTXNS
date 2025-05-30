@@ -1,4 +1,4 @@
-# Shader Training Example
+# RTX Neural Shading: Shader Training Example
 
 ## Purpose
 
@@ -6,21 +6,23 @@ This sample extends on the techniques shown in the [Simple Training](SimpleTrain
 
 ![Shader Training Output](shader_training.png)
 
-When the executable is built and run, the output shows 3 images where the image on the left is sphere lit with the full Disney BRDF shader. the middle image is the same shphere lit with the trained neural network and the final image on the right shows the loss delta. There is a UI which allows some control of the material properties as well as buttons to pause and reset the training as well as to save/load the current network.
+When the executable is built and run, the output shows 3 images where the image on the left is sphere lit with the full Disney BRDF shader. the middle image is the same sphere lit with the trained neural network and the final image on the right shows the loss delta. There is a UI which allows some control of the material properties as well as buttons to pause and reset the training as well as to save/load the current network.
 
 ## Training Flow
 
-To create and train a neural network with RTXNS, several stages are needed which will be described in more detail below. This differs from the previous [Simple Training](SimpleTraining.md) example which had a specific compute shader pass for training and another for inference. In this example, the training and optimisation passes are still compute based, but the inference is integrated into an existing pixel shader.
+To create and train a neural network with RTXNS, several stages are needed which will be described in more detail below. This differs from the previous [Simple Training](SimpleTraining.md) example which had a specific compute shader pass for training and another for inference. In this example, the training and optimization passes are still compute based, but the inference is integrated into an existing pixel shader.
 
-1. Create the host side neural network storage and initialise it
+1. Create the host side neural network storage and initialize it
 
-2. Create a GPU copy of the storage and initialise it with the host copy
+2. Create a device optimal layout and GPU buffer
 
-3. Create auxillary buffers for loss gradients and the optimiser pass
+3. Convert the host layout network to the device optimal layout on the GPU
 
-4. Run batches of the training shader followed by the optimiser shader on random inputs adjusting for the loss at each epoch
+4. Create auxiliary buffers for loss gradients and the optimizer pass
 
-5. Render the sphere with the inference pixel shader to generate the output image
+5. Run batches of the training shader followed by the optimizer shader on random inputs adjusting for the loss at each epoch
+
+6. Render the sphere with the inference pixel shader to generate the output image
 
 ## Network Configuration
 
@@ -41,7 +43,7 @@ On the host, the setup of the neural network is quite simple and broadly similar
 
 ### Training Loop
 
-After creating the appropriate pipelines and allocating the GPU buffers, the training loop is similar to the Simple Training example. The training and optimisation passes are executed multiple times per frame (`g_trainingStepsPerFrame = 100`) to speed up the training time whilst also also running the inference pass at a reasonable rate to see the model convergance. 
+After creating the appropriate pipelines and allocating the GPU buffers, the training loop is similar to the Simple Training example. The training and optimization passes are executed multiple times per frame (`g_trainingStepsPerFrame = 100`) to speed up the training time whilst also running the inference pass at a reasonable rate to see the model convergence. 
 
 ```
 for (int i = 0; i < g_trainingStepsPerFrame; ++i)
@@ -172,16 +174,25 @@ void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)
 The inference pass is nearly identical to the forward pass of the training shader. It currently uses `CoopVecMatrixLayout::TrainingOptimal` layout as it is run directly after a batch of training without converting the weights to an inference layout, but the default layout for inference should be `CoopVecMatrixLayout::InferencingOptimal`.
 
 ```
-float4 DisneyMLP(float NdotL, float NdotV, float NdotH, float LdotH, float roughness)
+float4 DisneyMLP<let HIDDEN_LAYERS : int, let HIDDEN_NEURONS : int>(
+    float NdotL, float NdotV, float NdotH, float LdotH, float roughness, ByteAddressBuffer mlpBuffer,
+    uint weightOffsets[HIDDEN_LAYERS+1], uint biasOffsets[HIDDEN_LAYERS+1])
 {
     // Calculate approximated core shader part using MLP
     float params[INPUT_FEATURES] = { NdotL, NdotV, NdotH, LdotH, roughness };
 
     var inputParams = rtxns::EncodeFrequency<half, INPUT_FEATURES>(params);
-    var model = rtxns::mlp::InferenceMLP<half, NUM_HIDDEN_LAYERS, INPUT_NEURONS, HIDDEN_NEURONS, OUTPUT_NEURONS, CoopVecMatrixLayout::TrainingOptimal, CoopVecComponentType::Float16>(gMLPParams, rtxns::UnpackArray<NUM_TRANSITIONS_ALIGN4, NUM_TRANSITIONS>(gConst.weightOffsets), rtxns::UnpackArray<NUM_TRANSITIONS_ALIGN4, NUM_TRANSITIONS>(gConst.biasOffsets));
+
+    var model = rtxns::mlp::InferenceMLP<half, 
+        HIDDEN_LAYERS, 
+        INPUT_FEATURES * FREQUENCY_EXPANSION, 
+        HIDDEN_NEURONS, 
+        OUTPUT_NEURONS, 
+        CoopVecMatrixLayout::TrainingOptimal, 
+        CoopVecComponentType::Float16>
+        (mlpBuffer, weightOffsets, biasOffsets);
 
     var outputParams = model.forward(inputParams, rtxns::mlp::ReLUAct<half, HIDDEN_NEURONS>(), rtxns::mlp::ExponentialAct<half, OUTPUT_NEURONS>());
-
     return float4(outputParams[0], outputParams[1], outputParams[2], outputParams[3]);
 }
 ```

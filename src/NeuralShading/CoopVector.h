@@ -10,85 +10,21 @@
 
 #pragma once
 
-#include <vector>
+#if DONUT_WITH_DX12
+#include "../../external/dx12-agility-sdk/build/native/include/d3d12.h"
+#endif
 
+#include <vector>
 #include <donut/app/DeviceManager.h>
 
+
 #include "Float16.h"
+#include "NeuralNetworkTypes.h"
 
 namespace rtxns
 {
-enum class MatrixLayout
-{
-    RowMajor,
-    ColumnMajor,
-    InferencingOptimal,
-    TrainingOptimal,
-};
-
-enum class Precision
-{
-    F16,
-    F32
-};
-
-constexpr size_t GetSize(Precision precision)
-{
-    switch (precision)
-    {
-    case Precision::F16:
-        return sizeof(uint16_t); // 2 bytes
-    case Precision::F32:
-        return sizeof(float);
-    default:
-        return 0; // Should not get here
-    }
-}
 
 class ICoopVectorUtils
-{
-public:
-    /**
-     * Query the size of a matrix in bytes.
-     * @return Size of matrix in bytes.
-     */
-    virtual size_t QueryMatrixByteSize(const uint32_t rows, const uint32_t cols, const MatrixLayout layout, const Precision precision = Precision::F16) = 0;
-
-    /**
-     * Convert matrix on the host from row-major layout in float32 to GPU-specific layout in dstPrecision.
-     * @return Size of matrix in bytes.
-     */
-    virtual size_t ConvertHostf32Matrix(const uint32_t rows,
-                                        const uint32_t cols,
-                                        const float* src,
-                                        const size_t srcSize,
-                                        uint8_t* dst,
-                                        const size_t dstSize,
-                                        const Precision dstPrecision,
-                                        const MatrixLayout dstLayout) const = 0;
-
-    /**
-     * Convert matrix on the host between any layouts.
-     * The Precision must currently be the same.
-     * @return Size of matrix in bytes.
-     */
-    virtual size_t ConvertHostMatrixLayout(const uint32_t rows,
-                                           const uint32_t cols,
-                                           const void* src,
-                                           const size_t srcSize,
-                                           const Precision srcPrecision,
-                                           const MatrixLayout srcLayout,
-                                           void* dst,
-                                           const size_t dstSize,
-                                           const Precision dstPrecision,
-                                           const MatrixLayout dstLayout) const = 0;
-
-    virtual size_t GetMatrixAlignment() = 0;
-    virtual size_t GetVectorAlignment() = 0;
-};
-
-
-class CoopVectorUtils_VK : public ICoopVectorUtils
 {
 public:
     size_t GetMatrixAlignment()
@@ -100,8 +36,34 @@ public:
         return s_vectorAlignment;
     }
 
-    static VkCooperativeVectorMatrixLayoutNV GetLayout(const MatrixLayout layout);
+    /**
+     * Query the size of a matrix in bytes.
+     * @return Size of matrix in bytes.
+     */
+    virtual size_t QueryMatrixByteSize(const uint32_t rows, const uint32_t cols, const MatrixLayout layout, const Precision precision = Precision::F16) = 0;
 
+    /**
+     * Convert matrix on the device between any layouts.
+     * The Precision must currently be the same.
+     * @return Size of matrix in bytes.
+     */
+    virtual void ConvertDeviceMatrixLayout(NetworkLayout const& srcLayout,
+                                           NetworkLayout const& dstLayout,
+                                           void* srcBuffer,
+                                           uint64_t srcBufferOffset,
+                                           void* dstBuffer,
+                                           uint64_t dstBufferOffset,
+                                           void* commandList) const = 0;
+
+protected:
+    static const size_t s_matrixAlignment = 64; ///< Minimum byte alignment according to spec.
+    static const size_t s_vectorAlignment = 16; ///< Minimum byte alignment according to spec.
+};
+
+#if DONUT_WITH_VULKAN
+class CoopVectorUtils_VK : public ICoopVectorUtils
+{
+public:
     CoopVectorUtils_VK(VkDevice vkDevice);
 
     /**
@@ -111,40 +73,44 @@ public:
     size_t QueryMatrixByteSize(const uint32_t rows, const uint32_t cols, const MatrixLayout layout, const Precision precision = Precision::F16);
 
     /**
-     * Convert matrix on the host from row-major layout in float32 to GPU-specific layout in dstPrecision.
-     * @return Size of matrix in bytes.
-     */
-    size_t ConvertHostf32Matrix(const uint32_t rows,
-                                const uint32_t cols,
-                                const float* src,
-                                const size_t srcSize,
-                                uint8_t* dst,
-                                const size_t dstSize,
-                                const Precision dstPrecision,
-                                const MatrixLayout dstLayout) const;
-
-    /**
-     * Convert matrix on the host between any layouts.
+     * Convert matrix on the device between any layouts.
      * The Precision must currently be the same.
      * @return Size of matrix in bytes.
      */
-    size_t ConvertHostMatrixLayout(const uint32_t rows,
-                                   const uint32_t cols,
-                                   const void* src,
-                                   const size_t srcSize,
-                                   const Precision srcPrecision,
-                                   const MatrixLayout srcLayout,
-                                   void* dst,
-                                   const size_t dstSize,
-                                   const Precision dstPrecision,
-                                   const MatrixLayout dstLayout) const;
-
-protected:
-    static const size_t s_matrixAlignment = 64; ///< Minimum byte alignment according to spec.
-    static const size_t s_vectorAlignment = 16; ///< Minimum byte alignment according to spec.
+    void ConvertDeviceMatrixLayout(
+        NetworkLayout const& srcLayout, NetworkLayout const& dstLayout, void* srcBuffer, uint64_t srcBufferOffset, void* dstBuffer, uint64_t dstBufferOffset, void* commandList) const;
 
 private:
     VkDevice m_vkDevice = nullptr;
     PFN_vkConvertCooperativeVectorMatrixNV m_vkConvertCooperativeVectorMatrixNV = nullptr;
+    PFN_vkCmdConvertCooperativeVectorMatrixNV m_vkCmdConvertCooperativeVectorMatrixNV = nullptr;
+    PFN_vkCmdCopyBuffer m_vkCmdCopyBuffer = nullptr;
+    PFN_vkGetBufferDeviceAddress m_vkGetBufferDeviceAddress = nullptr;
 };
+#endif
+
+#if DONUT_WITH_DX12
+class CoopVectorUtils_DX12 : public ICoopVectorUtils
+{
+public:
+    CoopVectorUtils_DX12(ID3D12Device* d3d12Device);
+
+    /**
+     * Query the size of a matrix in bytes.
+     * @return Size of matrix in bytes.
+     */
+    size_t QueryMatrixByteSize(const uint32_t rows, const uint32_t cols, const MatrixLayout layout, const Precision precision = Precision::F16);
+
+    /**
+     * Convert matrix on the device between any layouts.
+     * The Precision must currently be the same.
+     * @return Size of matrix in bytes.
+     */
+    void ConvertDeviceMatrixLayout(
+        NetworkLayout const& srcLayout, NetworkLayout const& dstLayout, void* srcBuffer, uint64_t srcBufferOffset, void* dstBuffer, uint64_t dstBufferOffset, void* commandList) const;
+
+private:
+    ID3D12Device* m_d3d12Device = nullptr;
+};
+#endif
 } // namespace rtxns

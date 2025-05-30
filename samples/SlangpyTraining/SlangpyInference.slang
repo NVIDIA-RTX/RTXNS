@@ -14,11 +14,11 @@
 import SlangpyTraining;
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
-StructuredBuffer<half> gMLPParams   :REGISTER_SRV(0, 0);
+ByteAddressBuffer gMLPParams        :REGISTER_SRV(0, 0);
 Texture2D<float4> inputTexture      :REGISTER_SRV(1, 0);
 RWTexture2D<float4> outputTexture   :REGISTER_UAV(0, 0);
 
-float3 evalModel(StructuredBuffer<half> weights, uint wo[MAX_LAYER_COUNT], uint bo[MAX_LAYER_COUNT], float2 uv)
+float3 evalModel(ByteAddressBuffer weights, uint wo[MAX_LAYER_COUNT], uint bo[MAX_LAYER_COUNT], float2 uv)
 {
     // Auto-generated defines from texture-training.py
     MODEL_TYPE model = MODEL_INITIALIZER;

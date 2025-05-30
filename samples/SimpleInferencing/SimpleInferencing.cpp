@@ -19,6 +19,7 @@
 #include <nvrhi/utils.h>
 
 #include "DeviceUtils.h"
+#include "GraphicsResources.h"
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
 #include "DirectoryHelper.h"
@@ -56,30 +57,26 @@ public:
         // Create the Neural network class and initialise it from a file.
         //
         ////////////////////
-        rtxns::Network net(GetDevice());
-
+        m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
+        rtxns::HostNetwork net(m_networkUtils);
         if (!net.InitialiseFromFile(GetLocalPath("assets/data").string() + std::string("/disney.ns.bin")))
         {
             log::debug("Loaded Neural Shading Network from file failed.");
             return false;
         }
 
-        // It is saved in a GPU neutral format, so change the matrix layout to a GPU layout optimised for inferencing.
-        if (!net.ChangeLayout(rtxns::MatrixLayout::InferencingOptimal))
-        {
-            log::debug("Converting network to inferencing failed.");
-            return false;
-        }
+        // We are expecting 4 layers, validate
+        assert(net.GetNetworkLayout().networkLayers.size() == 4);
 
-        // We are expecting 4 layers, so validate
-        assert(net.GetNetworkLayers().size() == 4);
-        assert(net.GetMatrixLayout() == rtxns::MatrixLayout::InferencingOptimal);
+        // Get a device optimized layout
+        rtxns::NetworkLayout deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(net.GetNetworkLayout(), rtxns::MatrixLayout::InferencingOptimal);
 
         // Store the weight and bias offsets into a uint4.
-        m_weightOffsets = dm::uint4(
-            net.GetNetworkLayers()[0].weightOffset, net.GetNetworkLayers()[1].weightOffset, net.GetNetworkLayers()[2].weightOffset, net.GetNetworkLayers()[3].weightOffset);
-        m_biasOffsets =
-            dm::uint4(net.GetNetworkLayers()[0].biasOffset, net.GetNetworkLayers()[1].biasOffset, net.GetNetworkLayers()[2].biasOffset, net.GetNetworkLayers()[3].biasOffset);
+        m_weightOffsets = dm::uint4(deviceNetworkLayout.networkLayers[0].weightOffset, deviceNetworkLayout.networkLayers[1].weightOffset,
+                                    deviceNetworkLayout.networkLayers[2].weightOffset, deviceNetworkLayout.networkLayers[3].weightOffset);
+
+        m_biasOffsets = dm::uint4(deviceNetworkLayout.networkLayers[0].biasOffset, deviceNetworkLayout.networkLayers[1].biasOffset, deviceNetworkLayout.networkLayers[2].biasOffset,
+                                  deviceNetworkLayout.networkLayers[3].biasOffset);
 
         ////////////////////
         //
@@ -151,20 +148,33 @@ public:
         ////////////////////
         const auto& params = net.GetNetworkParams();
 
-        nvrhi::BufferDesc paramsBufferDesc;
-        paramsBufferDesc.byteSize = params.size();
-        paramsBufferDesc.structStride = sizeof(uint16_t);
-        paramsBufferDesc.debugName = "MLPParamsBuffer";
-        paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
-        m_mlpParamsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+        // Create a buffer for the host side weight and bias parameters
+        nvrhi::BufferDesc bufferDesc;
+        bufferDesc.byteSize = params.size();
+        bufferDesc.debugName = "MLPParamsUploadBuffer";
+        bufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        bufferDesc.keepInitialState = true;
+        m_mlpHostBuffer = GetDevice()->createBuffer(bufferDesc);
 
-        m_commandList->beginTrackingBufferState(m_mlpParamsBuffer, nvrhi::ResourceStates::CopyDest);
-        m_commandList->writeBuffer(m_mlpParamsBuffer, params.data(), params.size());
-        m_commandList->setPermanentBufferState(m_mlpParamsBuffer, nvrhi::ResourceStates::ShaderResource);
+        // Create a buffer for a device optimized parameters layout
+        bufferDesc.byteSize = deviceNetworkLayout.networkSize;
+        bufferDesc.canHaveRawViews = true;
+        bufferDesc.canHaveUAVs = true;
+        bufferDesc.debugName = "MLPParamsByteAddressBuffer";
+        bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        m_mlpDeviceBuffer = GetDevice()->createBuffer(bufferDesc);
+
+        // Upload the parameters
+        m_commandList->writeBuffer(m_mlpHostBuffer, params.data(), params.size());
+
+        // Convert to GPU optimized layout
+        m_networkUtils->ConvertWeights(net.GetNetworkLayout(), deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
+
+        m_commandList->setBufferState(m_mlpDeviceBuffer, nvrhi::ResourceStates::ShaderResource);
+        m_commandList->commitBarriers();
 
         m_commandList->close();
         GetDevice()->executeCommandList(m_commandList);
-
 
         ////////////////////
         //
@@ -175,7 +185,7 @@ public:
         bindingSetDesc.bindings = { // Note: using viewIndex to construct a buffer range.
                                     nvrhi::BindingSetItem::ConstantBuffer(0, m_constantBuffer),
                                     // Parameters buffer
-                                    nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_mlpParamsBuffer)
+                                    nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer)
         };
 
         // Create the binding layout (if it's empty -- so, on the first iteration) and the binding set.
@@ -330,7 +340,8 @@ private:
     nvrhi::ShaderHandle m_vertexShader;
     nvrhi::ShaderHandle m_pixelShader;
     nvrhi::BufferHandle m_constantBuffer;
-    nvrhi::BufferHandle m_mlpParamsBuffer;
+    nvrhi::BufferHandle m_mlpHostBuffer;
+    nvrhi::BufferHandle m_mlpDeviceBuffer;
     nvrhi::BufferHandle m_vertexBuffer;
     nvrhi::BufferHandle m_indexBuffer;
     nvrhi::InputLayoutHandle m_inputLayout;
@@ -340,6 +351,7 @@ private:
     nvrhi::CommandListHandle m_commandList;
 
     std::shared_ptr<engine::ShaderFactory> m_shaderFactory;
+    std::shared_ptr<rtxns::NetworkUtilities> m_networkUtils;
 
     float3 m_lightDir{ -0.761f, -0.467f, -0.450f };
     float2 m_currentXY;
@@ -379,15 +391,15 @@ public:
 };
 
 #ifdef WIN32
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
 #else
 int main(int __argc, const char** __argv)
 #endif
 {
-    nvrhi::GraphicsAPI graphicsApi = __argc == 1 ? nvrhi::GraphicsAPI::VULKAN : app::GetGraphicsAPIFromCommandLine(__argc, __argv);
-    if (graphicsApi == nvrhi::GraphicsAPI::D3D11 || graphicsApi == nvrhi::GraphicsAPI::D3D12)
+    nvrhi::GraphicsAPI graphicsApi = app::GetGraphicsAPIFromCommandLine(__argc, __argv);
+    if (graphicsApi == nvrhi::GraphicsAPI::D3D11)
     {
-        log::error("This sample does not support D3D11 or D3D12.");
+        log::error("This sample does not support D3D11");
         return 1;
     }
     std::unique_ptr<app::DeviceManager> deviceManager(app::DeviceManager::Create(graphicsApi));
@@ -397,6 +409,7 @@ int main(int __argc, const char** __argv)
 
 #ifdef _DEBUG
     deviceParams.enableDebugRuntime = true;
+    deviceParams.enableGPUValidation = false;
     deviceParams.enableNvrhiValidationLayer = true;
 #endif
 
@@ -405,11 +418,17 @@ int main(int __argc, const char** __argv)
     // Setup the CoopVector extensions.
     //
     ////////////////////
-    SetCoopVectorExtensionParameters(deviceParams, graphicsApi, true);
+    SetCoopVectorExtensionParameters(deviceParams, graphicsApi, true, g_windowTitle);
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_windowTitle))
     {
         log::fatal("Cannot initialize a graphics device with the requested parameters. Please try a NVIDIA driver version greater than 570");
+        return 1;
+    }
+    auto graphicsResources = std::make_unique<rtxns::GraphicsResources>(deviceManager->GetDevice());
+    if (!graphicsResources->GetCoopVectorFeatures().inferenceSupported && !graphicsResources->GetCoopVectorFeatures().fp16InferencingSupported)
+    {
+        log::fatal("Not all required Coop Vector features are available");
         return 1;
     }
 

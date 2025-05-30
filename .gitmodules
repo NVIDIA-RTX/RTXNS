@@ -1,3 +1,3 @@
 [submodule "donut"]
 	path = external/donut
-	url = https://github.com/NVIDIA-RTX/Donut
+	url = https://github.com/NVIDIAGameWorks/donut

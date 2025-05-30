@@ -10,78 +10,102 @@
 
 #pragma once
 
+#include "CoopVector.h"
 #include <vector>
 #include <filesystem>
 #include <nvrhi/utils.h>
-#include "CoopVector.h"
+
+#include "NeuralNetworkTypes.h"
 
 namespace rtxns
 {
-struct NetworkArchitecture
-{
-    uint32_t numHiddenLayers = 0;
-    uint32_t inputNeurons = 0;
-    uint32_t hiddenNeurons = 0;
-    uint32_t outputNeurons = 0;
-    Precision weightPrecision = Precision::F16;
-    Precision biasPrecision = Precision::F16;
-};
 
-struct NetworkLayer
-{
-    uint32_t inputs = 0; ///< Columns in the weight matrix.
-    uint32_t outputs = 0; ///< Rows in the weight matrix.
-    size_t weightSize = 0; ///< Size of the weight matrix in bytes.
-    size_t biasSize = 0; ///< Size of the bias vector in bytes.
-    uint32_t weightOffset = 0; ///< Offset to the weights in bytes.
-    uint32_t biasOffset = 0; ///< Offset to the biases in bytes.
-};
-
-class Network
+class NetworkUtilities
 {
 public:
-    Network(nvrhi::DeviceHandle device);
-    ~Network(){};
+    NetworkUtilities(nvrhi::DeviceHandle device);
+    ~NetworkUtilities()
+    {
+    }
 
-    bool Initialise(const NetworkArchitecture& netArch, MatrixLayout layout);
+    bool ValidateNetworkArchitecture(NetworkArchitecture const& netArch);
+
+    // Create host side network layout.
+    NetworkLayout CreateHostNetworkLayout(NetworkArchitecture const& netArch);
+
+    // Set the weights and bias size / offsets for each layer in the network.
+    void SetNetworkLayerSizes(NetworkLayout& layout);
+
+    // Returns a updated network layout where the weights and bias size / offsets have been update
+    // for the new matrix layout
+    // Can be device optimal matrix layout
+    NetworkLayout GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout);
+
+    // Converts weights and bias buffers from src layout to the dst layout.
+    // Both buffers must be device side.
+    // Both networks must be of the same network layout, only differing in MatrixLayout
+    void ConvertWeights(NetworkLayout const& srcLayout,
+                        NetworkLayout const& dstLayout,
+                        nvrhi::BufferHandle srcBuffer,
+                        uint64_t srcBufferOffset,
+                        nvrhi::BufferHandle dstBuffer,
+                        uint64_t dstBufferOffset,
+                        nvrhi::DeviceHandle device,
+                        nvrhi::CommandListHandle commandList);
+
+private:
+    std::unique_ptr<ICoopVectorUtils> m_coopVecUtils;
+};
+
+// Represent a host side neural network.
+// Stores the network layout and parameters.
+// Functionality to initialize a network to starting values or load from file.
+// Also write parameters back to file
+class HostNetwork
+{
+public:
+    HostNetwork(std::shared_ptr<NetworkUtilities> networkUtils);
+    ~HostNetwork(){};
+
+    // Create host side network from provided architecture with initial values.
+    bool Initialise(const NetworkArchitecture& netArch);
+
+    // Create host side network of provided architecture and initial values from a json file.
     bool InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::string& fileName);
+    // Create host side network of provided architecture and initial values from a file.
     bool InitialiseFromFile(const std::string& fileName);
-    bool InitialiseFromNetwork(const Network& network, MatrixLayout layout);
-
-    bool ChangeLayout(MatrixLayout layout);
-
+    // Create host side network from an existing network.
+    bool InitialiseFromNetwork(HostNetwork const& network);
+    // Write the current network and parameters to file.
     bool WriteToFile(const std::string& fileName);
-
-    void UpdateFromBufferToFile(nvrhi::BufferHandle gpuBuffer, const std::string& fileName);
+    // Convert device layout to host layout and update the host side parameters.
+    void UpdateFromBufferToFile(nvrhi::BufferHandle hostLayoutBuffer,
+                                nvrhi::BufferHandle deviceLayoutBuffer,
+                                NetworkLayout const& hostLayout,
+                                NetworkLayout const& deviceLayout,
+                                const std::string& fileName,
+                                nvrhi::DeviceHandle device,
+                                nvrhi::CommandListHandle commandList);
 
     const NetworkArchitecture& GetNetworkArchitecture() const
     {
         return m_networkArchitecture;
     }
 
-    const std::vector<NetworkLayer>& GetNetworkLayers() const
-    {
-        return m_networkLayers;
-    }
-
     const std::vector<uint8_t>& GetNetworkParams() const
     {
-        return m_params;
+        return m_networkParams;
     }
 
-    const MatrixLayout& GetMatrixLayout() const
+    const NetworkLayout& GetNetworkLayout() const
     {
-        return m_layout;
+        return m_networkLayout;
     }
 
 private:
-    bool ValidateNetworkArchitecture(const NetworkArchitecture& netArch);
-
-private:
-    nvrhi::DeviceHandle m_device;
+    std::shared_ptr<NetworkUtilities> m_networkUtils;
     NetworkArchitecture m_networkArchitecture;
-    std::vector<NetworkLayer> m_networkLayers;
-    std::vector<uint8_t> m_params;
-    MatrixLayout m_layout;
+    std::vector<uint8_t> m_networkParams;
+    NetworkLayout m_networkLayout;
 };
 }; // namespace rtxns

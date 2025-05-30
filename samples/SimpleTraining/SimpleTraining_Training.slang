@@ -18,9 +18,9 @@ import LinearOps;
 
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
-StructuredBuffer<half> gMLPParams               :REGISTER_SRV(0, 0);
+ByteAddressBuffer gMLPParams                    :REGISTER_SRV(0, 0);
 Texture2D<float4> inputTexture                  :REGISTER_SRV(1, 0);
-RWStructuredBuffer<half> gMLPParamsGradients    :REGISTER_UAV(0, 0);
+RWByteAddressBuffer gMLPParamsGradients         :REGISTER_UAV(0, 0);
 RWStructuredBuffer<uint> gRandState             :REGISTER_UAV(1, 0);
 RWTexture2D<float4> outputTexture               :REGISTER_UAV(2, 0);
 RWTexture2D<float4> lossTexture                 :REGISTER_UAV(3, 0);
@@ -42,7 +42,7 @@ struct RNG
 
 [shader("compute")]
 [numthreads(8, 8, 1)] 
-void main_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
+void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint2 batchSize = uint2(gConst.batchSizeX, gConst.batchSizeY);
 

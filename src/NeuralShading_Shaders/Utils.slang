@@ -51,8 +51,7 @@ namespace rtxns
     CoopVec<T, NUM_SCALES * PARAMS_COUNT * 2> EncodeFrequencyN<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int, let NUM_SCALES : int>(CoopVec<T, PARAMS_COUNT> inputParams)
     {
         var inputVec = VectorFromCoopVec(inputParams);
-
-        vector<float, NUM_SCALES * PARAMS_COUNT * 2> outputVec;
+        float[NUM_SCALES * PARAMS_COUNT * 2] outputVec;
 
         [ForceUnroll]
         for (int i = 0; i < PARAMS_COUNT; ++i)
@@ -72,7 +71,7 @@ namespace rtxns
             }
         }
 
-        return CoopVecFromVector<T>(outputVec);
+        return CoopVecFromArray<T, NUM_SCALES * PARAMS_COUNT * 2>(outputVec);
     }
 
     // Triangle encoding expands input count 
@@ -153,7 +152,7 @@ namespace rtxns
         parameters = diffPair(parameters.p, gradArray);
     }
 
-    // Construct a CoopVec from a float vector
+    // Construct a CoopVec from a float vector of up to 4 parameters
     [BackwardDerivative(CoopVecFromVector_Backward)]
     CoopVec<T, PARAMS_COUNT> CoopVecFromVector<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int>(vector<float, PARAMS_COUNT> parameters)
     {

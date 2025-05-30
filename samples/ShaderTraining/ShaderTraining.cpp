@@ -22,6 +22,7 @@
 #include <nvrhi/utils.h>
 
 #include "DeviceUtils.h"
+#include "GraphicsResources.h"
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
 
@@ -54,7 +55,7 @@ struct UIData
 
     bool reset = false;
     bool training = true;
-    bool load;
+    bool load = false;
     std::string fileName;
 };
 
@@ -83,11 +84,12 @@ public:
 
         ////////////////////
         //
-        // Create the Neural network class and initialise it the hyper parameters from NetworkConfig.h.
+        // Create the Neural network class and initialize it the hyper parameters from NetworkConfig.h.
         //
         ////////////////////
-        m_NeuralNetwork = std::make_unique<rtxns::Network>(GetDevice());
-        if (!m_NeuralNetwork->Initialise(m_netArch, rtxns::MatrixLayout::TrainingOptimal))
+        m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
+        m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
+        if (!m_neuralNetwork->Initialise(m_netArch))
         {
             log::error("Failed to create a network.");
             return false;
@@ -202,14 +204,16 @@ public:
 
     void CreateMLPBuffers()
     {
-        const auto& params = m_NeuralNetwork->GetNetworkParams();
-        assert(m_NeuralNetwork->GetMatrixLayout() == rtxns::MatrixLayout::TrainingOptimal);
+        const auto& params = m_neuralNetwork->GetNetworkParams();
 
         for (int i = 0; i < NUM_TRANSITIONS; ++i)
         {
-            m_weightOffsets[i / 4][i % 4] = m_NeuralNetwork->GetNetworkLayers()[i].weightOffset;
-            m_biasOffsets[i / 4][i % 4] = m_NeuralNetwork->GetNetworkLayers()[i].biasOffset;
+            m_weightOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].weightOffset;
+            m_biasOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].biasOffset;
         }
+
+        // Get a device optimized layout
+        m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
 
         m_totalParameterCount = uint(params.size() / sizeof(uint16_t));
         m_batchSize = BATCH_SIZE;
@@ -220,22 +224,30 @@ public:
             m_commandList->open();
 
             nvrhi::BufferDesc paramsBufferDesc;
-            paramsBufferDesc.canHaveUAVs = true;
-            paramsBufferDesc.keepInitialState = true;
 
-            paramsBufferDesc.debugName = "MLPParamsBuffer";
+            paramsBufferDesc.debugName = "MLPParamsDeviceBuffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
-            paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(uint16_t);
-            paramsBufferDesc.structStride = sizeof(uint16_t);
-            m_mlpParamsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+            paramsBufferDesc.byteSize = params.size();
+            paramsBufferDesc.keepInitialState = true;
+            paramsBufferDesc.canHaveUAVs = true;
+            m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
-            m_commandList->beginTrackingBufferState(m_mlpParamsBuffer, nvrhi::ResourceStates::CopyDest);
-            m_commandList->writeBuffer(m_mlpParamsBuffer, params.data(), params.size());
+            paramsBufferDesc.debugName = "MLPParamsDeviceBuffer";
+            paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+            paramsBufferDesc.canHaveRawViews = true;
+            paramsBufferDesc.canHaveTypedViews = true;
+            paramsBufferDesc.canHaveUAVs = true;
+            paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
+            m_mlpDeviceBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+
+            // Upload the parameters
+            UpdateDeviceNetworkParameters(m_commandList);
 
             paramsBufferDesc.debugName = "MLPParamsBuffer32";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
             paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
-            paramsBufferDesc.structStride = sizeof(float);
+            paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
             m_mlpParamsBuffer32 = GetDevice()->createBuffer(paramsBufferDesc);
 
             m_commandList->beginTrackingBufferState(m_mlpParamsBuffer32, nvrhi::ResourceStates::CopyDest);
@@ -249,6 +261,7 @@ public:
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             paramsBufferDesc.byteSize = (m_totalParameterCount * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
             paramsBufferDesc.structStride = sizeof(uint16_t);
+            paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
             m_mlpGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
             m_commandList->beginTrackingBufferState(m_mlpGradientsBuffer, nvrhi::ResourceStates::UnorderedAccess);
@@ -257,16 +270,14 @@ public:
             paramsBufferDesc.debugName = "MLPMoments1Buffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
-            paramsBufferDesc.structStride = sizeof(float);
+            paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
+            paramsBufferDesc.canHaveRawViews = false;
             m_mlpMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 
             m_commandList->beginTrackingBufferState(m_mlpMoments1Buffer, nvrhi::ResourceStates::UnorderedAccess);
             m_commandList->clearBufferUInt(m_mlpMoments1Buffer, 0);
 
             paramsBufferDesc.debugName = "MLPMoments2Buffer";
-            paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
-            paramsBufferDesc.structStride = sizeof(float);
             m_mlpMoments2Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 
             m_commandList->beginTrackingBufferState(m_mlpMoments2Buffer, nvrhi::ResourceStates::UnorderedAccess);
@@ -276,16 +287,16 @@ public:
             GetDevice()->executeCommandList(m_commandList);
         }
 
+        nvrhi::BindingSetDesc bindingSetDesc = {};
         // Training binding
         {
             m_trainingPass.bindingSet = nullptr;
             m_trainingPass.bindingLayout = nullptr;
 
-            nvrhi::BindingSetDesc bindingSetDesc;
             bindingSetDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_mlpParamsBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_mlpGradientsBuffer),
+                nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer),
+                nvrhi::BindingSetItem::RawBuffer_UAV(0, m_mlpGradientsBuffer),
             };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_trainingPass.bindingLayout, m_trainingPass.bindingSet);
 
@@ -300,11 +311,11 @@ public:
             m_optimizerPass.bindingSet = nullptr;
             m_optimizerPass.bindingLayout = nullptr;
 
-            nvrhi::BindingSetDesc bindingSetDesc;
+            bindingSetDesc = {};
             bindingSetDesc.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer),  nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_mlpParamsBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_mlpParamsBuffer32), nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_mlpGradientsBuffer),
-                nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_mlpMoments1Buffer), nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_mlpMoments2Buffer),
+                nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_UAV(0, m_mlpDeviceBuffer),
+                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpParamsBuffer32),     nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
+                nvrhi::BindingSetItem::TypedBuffer_UAV(3, m_mlpMoments1Buffer),     nvrhi::BindingSetItem::TypedBuffer_UAV(4, m_mlpMoments2Buffer),
             };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_optimizerPass.bindingLayout, m_optimizerPass.bindingSet);
 
@@ -320,8 +331,8 @@ public:
             m_inferencePass.bindingSet = nullptr;
             m_inferencePass.bindingLayout = nullptr;
 
-            nvrhi::BindingSetDesc bindingSetDesc;
-            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_inferencePass.constantBuffer), nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_mlpParamsBuffer) };
+            bindingSetDesc = {};
+            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_inferencePass.constantBuffer), nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer) };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_inferencePass.bindingLayout, m_inferencePass.bindingSet);
         }
 
@@ -331,8 +342,8 @@ public:
             m_differencePass.bindingSet = nullptr;
             m_differencePass.bindingLayout = nullptr;
 
-            nvrhi::BindingSetDesc bindingSetDesc;
-            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_differencePass.constantBuffer), nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_mlpParamsBuffer) };
+            bindingSetDesc = {};
+            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_differencePass.constantBuffer), nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer) };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_differencePass.bindingLayout, m_differencePass.bindingSet);
         }
 
@@ -341,6 +352,24 @@ public:
         m_userInterfaceParameters->epochs = 0;
         m_userInterfaceParameters->trainingTime = 0.0f;
     }
+
+    // expects an open command list
+    void UpdateDeviceNetworkParameters(nvrhi::CommandListHandle commandList)
+    {
+        // Upload the host side parameters
+        commandList->setBufferState(m_mlpHostBuffer, nvrhi::ResourceStates::CopyDest);
+        commandList->commitBarriers();
+        commandList->writeBuffer(m_mlpHostBuffer, m_neuralNetwork->GetNetworkParams().data(), m_neuralNetwork->GetNetworkParams().size());
+
+        // Convert to GPU optimized layout
+        m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
+
+        // Update barriers for use
+        commandList->setBufferState(m_mlpDeviceBuffer, nvrhi::ResourceStates::ShaderResource);
+        commandList->commitBarriers();
+        // m_convertWeights = true;
+    }
+
 
     std::shared_ptr<engine::ShaderFactory> GetShaderFactory() const
     {
@@ -393,8 +422,8 @@ public:
         ////////////////////
         if (m_userInterfaceParameters->reset)
         {
-            m_NeuralNetwork = std::make_unique<rtxns::Network>(GetDevice());
-            if (m_NeuralNetwork->Initialise(m_netArch, rtxns::MatrixLayout::TrainingOptimal))
+            m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
+            if (m_neuralNetwork->Initialise(m_netArch))
             {
                 CreateMLPBuffers();
             }
@@ -410,14 +439,14 @@ public:
         {
             if (m_userInterfaceParameters->load)
             {
-                m_NeuralNetwork = std::make_unique<rtxns::Network>(GetDevice());
-                m_NeuralNetwork->InitialiseFromFile(m_userInterfaceParameters->fileName);
-                m_NeuralNetwork->ChangeLayout(rtxns::MatrixLayout::TrainingOptimal);
+                m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
+                m_neuralNetwork->InitialiseFromFile(m_userInterfaceParameters->fileName);
                 CreateMLPBuffers();
             }
             else
             {
-                m_NeuralNetwork->UpdateFromBufferToFile(m_mlpParamsBuffer, m_userInterfaceParameters->fileName);
+                m_neuralNetwork->UpdateFromBufferToFile(m_mlpHostBuffer, m_mlpDeviceBuffer, m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout,
+                                                        m_userInterfaceParameters->fileName, GetDevice(), m_commandList);
             }
             m_userInterfaceParameters->fileName = "";
         }
@@ -539,6 +568,14 @@ public:
         RenderPass* passes[] = { &m_directPass, &m_inferencePass, &m_differencePass };
         for (int viewIndex = 0; viewIndex < g_viewsNum; ++viewIndex)
         {
+            nvrhi::TimerQueryHandle timer;
+            if (viewIndex < 2 && updateStat)
+            {
+                timer = viewIndex == 0 ? m_disneyTimer.Get() : m_neuralTimer.Get();
+                GetDevice()->resetTimerQuery(timer);
+                m_commandList->beginTimerQuery(timer);
+            }
+
             auto& pass = *passes[viewIndex];
 
             if (!pass.pipeline)
@@ -583,14 +620,6 @@ public:
 
             // Update the pipeline, bindings, and other state.
             m_commandList->setGraphicsState(state);
-
-            nvrhi::TimerQueryHandle timer;
-            if (viewIndex < 2 && updateStat)
-            {
-                timer = viewIndex == 0 ? m_disneyTimer.Get() : m_neuralTimer.Get();
-                GetDevice()->resetTimerQuery(timer);
-                m_commandList->beginTimerQuery(timer);
-            }
 
             // Draw the model.
             nvrhi::DrawArguments args;
@@ -641,7 +670,8 @@ private:
     nvrhi::BufferHandle m_indexBuffer;
 
     nvrhi::BufferHandle m_trainingConstantBuffer;
-    nvrhi::BufferHandle m_mlpParamsBuffer;
+    nvrhi::BufferHandle m_mlpHostBuffer;
+    nvrhi::BufferHandle m_mlpDeviceBuffer;
     nvrhi::BufferHandle m_mlpParamsBuffer32;
     nvrhi::BufferHandle m_mlpGradientsBuffer;
     nvrhi::BufferHandle m_mlpMoments1Buffer;
@@ -672,7 +702,9 @@ private:
 
     UIData* m_userInterfaceParameters;
 
-    std::unique_ptr<rtxns::Network> m_NeuralNetwork;
+    std::shared_ptr<rtxns::NetworkUtilities> m_networkUtils;
+    std::unique_ptr<rtxns::HostNetwork> m_neuralNetwork;
+    rtxns::NetworkLayout m_deviceNetworkLayout;
 
     rtxns::NetworkArchitecture m_netArch = {
         .numHiddenLayers = NUM_HIDDEN_LAYERS,
@@ -743,15 +775,15 @@ private:
 };
 
 #ifdef WIN32
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
 #else
 int main(int __argc, const char** __argv)
 #endif
 {
     nvrhi::GraphicsAPI graphicsApi = app::GetGraphicsAPIFromCommandLine(__argc, __argv);
-    if (graphicsApi == nvrhi::GraphicsAPI::D3D11 || graphicsApi == nvrhi::GraphicsAPI::D3D12)
+    if (graphicsApi == nvrhi::GraphicsAPI::D3D11)
     {
-        log::error("This sample does not support D3D11 or D3D12.");
+        log::error("This sample does not support D3D11.");
         return 1;
     }
     std::unique_ptr<app::DeviceManager> deviceManager(app::DeviceManager::Create(graphicsApi));
@@ -760,7 +792,7 @@ int main(int __argc, const char** __argv)
     deviceParams.backBufferWidth = deviceParams.backBufferHeight * g_viewsNum;
 
 #ifdef _DEBUG
-    // deviceParams.enableDebugRuntime = true;
+    deviceParams.enableDebugRuntime = true;
     deviceParams.enableNvrhiValidationLayer = true;
 #endif
 
@@ -769,11 +801,19 @@ int main(int __argc, const char** __argv)
     // Setup the CoopVector extensions.
     //
     ////////////////////
-    SetCoopVectorExtensionParameters(deviceParams, graphicsApi, true);
+    SetCoopVectorExtensionParameters(deviceParams, graphicsApi, true, g_windowTitle);
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_windowTitle))
     {
         log::fatal("Cannot initialize a graphics device with the requested parameters. Please try a NVIDIA driver version greater than 570");
+        return 1;
+    }
+
+    auto graphicsResources = std::make_unique<rtxns::GraphicsResources>(deviceManager->GetDevice());
+    if (!graphicsResources->GetCoopVectorFeatures().inferenceSupported && !graphicsResources->GetCoopVectorFeatures().trainingSupported &&
+        !graphicsResources->GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources->GetCoopVectorFeatures().fp16TrainingSupported)
+    {
+        log::fatal("Not all required Coop Vector features are available");
         return 1;
     }
 

@@ -30,9 +30,9 @@ namespace mlp
     >
     {
         // Initialized from buffer with weights and biases and two vectors of offsets
-        __init(StructuredBuffer<T> buf, uint matrixOffset[HIDDEN_LAYERS+1], uint biasOffset[HIDDEN_LAYERS+1]) 
+        __init(ByteAddressBuffer buf, uint matrixOffset[HIDDEN_LAYERS+1], uint biasOffset[HIDDEN_LAYERS+1]) 
         {
-            parameters = MatrixBiasBuffer<T>(buf);
+            parameters = MatrixBiasBuffer(buf);
 
             [ForceUnroll]
             for (int i = 0; i <= HIDDEN_LAYERS; ++i)
@@ -52,7 +52,7 @@ namespace mlp
             return finalAct.eval(LinearOp<T, OUTPUTS, HIDDEN>(params, parameters, layerOffsets[HIDDEN_LAYERS], matrixLayout, componentType));
         }
 
-        MatrixBiasBuffer<T> parameters;
+        MatrixBiasBuffer parameters;
         uint2 layerOffsets[HIDDEN_LAYERS+1];
     }
 
@@ -70,14 +70,14 @@ namespace mlp
     {
         // Initialized from buffer with weights and biases, buffer to store derivatives and two vectors of offsets
         __init(
-            StructuredBuffer<T> matrixBuffer, 
-            RWStructuredBuffer<T> derivativeBuffer, 
+            ByteAddressBuffer matrixBuffer, 
+            RWByteAddressBuffer derivativeBuffer, 
             uint matrixOffset[HIDDEN_LAYERS+1], 
             uint biasOffset[HIDDEN_LAYERS+1]
         ) 
         {
-            parameters = MatrixBiasBuffer<T>(matrixBuffer);
-            derivatives = MatrixBiasBufferDifferential<T>(derivativeBuffer);
+            parameters = MatrixBiasBuffer(matrixBuffer);
+            derivatives = MatrixBiasBufferDifferential(derivativeBuffer);
             
             [ForceUnroll]
             for (int i = 0; i <= HIDDEN_LAYERS; ++i)
@@ -91,7 +91,7 @@ namespace mlp
         [Differentiable]
         static CoopVec<T, OUTPUTS> forward_s<Act : IActivation<T, HIDDEN>, FinalAct : IActivation<T, OUTPUTS>>(
             CoopVec<T, INPUTS> inputParams, 
-            MatrixBiasBuffer<T> parameters,
+            MatrixBiasBuffer parameters,
             uint2 layerOffsets[HIDDEN_LAYERS + 1],
             no_diff Act act,
             no_diff FinalAct finalAct
@@ -115,7 +115,7 @@ namespace mlp
         // Full MLP backward step calculation is infered automatically by Slang autodiff from forward function
         void backward<Act : IActivation<T, HIDDEN>, FinalAct : IActivation<T, OUTPUTS>>(DifferentialPair<CoopVec<T, INPUTS>> dInputParams, Act act, FinalAct finalAct, CoopVec<T, OUTPUTS> loss)
         {
-            bwd_diff(forward_s<Act, FinalAct>)( dInputParams, DifferentialPtrPair<MatrixBiasBuffer<T>>(parameters, derivatives), layerOffsets, act, finalAct, loss);
+            bwd_diff(forward_s<Act, FinalAct>)( dInputParams, DifferentialPtrPair<MatrixBiasBuffer>(parameters, derivatives), layerOffsets, act, finalAct, loss);
         }
         void backward<Act : IActivation<T, HIDDEN>, FinalAct : IActivation<T, OUTPUTS>>(CoopVec<T, INPUTS> inputParams, Act act, FinalAct finalAct, CoopVec<T, OUTPUTS> loss)
         {
@@ -123,8 +123,8 @@ namespace mlp
             backward(dInputParams, act, finalAct, loss);
         }
 
-        MatrixBiasBuffer<T> parameters;
-        MatrixBiasBufferDifferential<T> derivatives;
+        MatrixBiasBuffer parameters;
+        MatrixBiasBufferDifferential derivatives;
         uint2 layerOffsets[HIDDEN_LAYERS+1];
     }
 }

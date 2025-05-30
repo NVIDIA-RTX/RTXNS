@@ -2,7 +2,7 @@
 
 RTX Neural Shading (RTXNS) also known as RTX Neural Shaders, is intended as a starting point for developers interested in bringing Machine Learning (ML) to their graphics applications. It provides a number of examples to help the reader understand how to train their own neural networks and then use those models to perform inference alongside their normal graphics rendering. 
 
-RTXNS uses the [Slang](https://shader-slang.com) shading language and it utilises the Vulkan Cooperative Vectors extension to provide access to the GPUs ML acceleration.
+RTXNS uses the [Slang](https://shader-slang.com) shading language and it utilizes either the DirectX Preview Agility SDK or the Vulkan Cooperative Vectors extension to provide access to the GPUs ML acceleration.
 
 A number of examples are included which build upon each other from a simple inference example to more complex examples showing how to train a neural network to represent a shader or a texture. Helper functions to facilitate building your own neural networks are also included. 
 
@@ -12,7 +12,14 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 
 ## Requirements
 
-GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [CMake v3.24.3][CMake] **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** [VS 2022][VS22] **|** [Slang v2025.3.3](https://shader-slang.com/tools/)  **|** Driver ≥ 572.16
+### General
+[CMake v3.24.3][CMake] **|** [VS 2022][VS22] **|** [Slang v2025.10](https://shader-slang.com/tools/)
+
+### DirectX
+[DirectX Preview Agility SDK 1.717.0-preview](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.717.0-preview) **|** [Microsoft DXC 1.8.2505.28](https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2505.28) **|** [Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver) 
+
+### Vulkan
+GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** Public Driver ≥ 572.16
 
 ## Known Issues
 

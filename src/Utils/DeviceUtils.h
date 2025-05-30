@@ -12,19 +12,13 @@
 
 #include <nvrhi/nvrhi.h>
 
-#define NTC_WITH_VULKAN 1
-
 namespace donut::app
 {
 struct DeviceCreationParameters;
 class DeviceManager;
 } // namespace donut::app
 
-void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& deviceParams, nvrhi::GraphicsAPI graphicsApi, bool enableSharedMemory);
-
-bool IsDP4aSupported(nvrhi::IDevice* device);
-
-bool IsFloat16Supported(nvrhi::IDevice* device);
+void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& deviceParams, nvrhi::GraphicsAPI graphicsApi, bool enableSharedMemory, char const* windowTitle);
 
 // Call after device creation to verify the extension has been enabled
 bool CoopVectorExtensionSupported(donut::app::DeviceManager* deviceManager);

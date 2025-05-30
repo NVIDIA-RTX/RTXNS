@@ -16,19 +16,28 @@ import CooperativeVectorFunctions;
 import Utils;
 import Activation;
 import MLP;
-
-#include "Disney.h"
-#include "DisneyMLP.h"
+import Disney;
+import DisneyMLP;
 
 DECLARE_CBUFFER(InferenceConstantBufferEntry, gConst, 0, 0);
-StructuredBuffer<half> gMLPParams : REGISTER_SRV(0, 0);
+ByteAddressBuffer gMLPParams : REGISTER_SRV(0, 0);
+
+struct PS_INPUT
+{
+    float4 pos : SV_Position;
+    float3 norm : NORMAL;
+    float3 view : VIEW;
+}
 
 [shader("vertex")]
-void main_vs(float3 i_pos, float3 i_norm, out float4 o_pos : SV_Position, out float3 o_norm, out float3 o_view)
+void main_vs(
+    float3 i_pos : POSITION, 
+    float3 i_norm : NORMAL, 
+    out PS_INPUT output)
 {
-    o_pos = mul(float4(i_pos, 1), gConst.viewProject);
-    o_norm = i_norm;
-    o_view = gConst.cameraPos.xyz - i_pos;
+    output.pos = mul(float4(i_pos, 1), gConst.viewProject);
+    output.norm = i_norm;
+    output.view = gConst.cameraPos.xyz - i_pos;
 }
 
 float3 calcColor(float4 params)
@@ -40,11 +49,13 @@ float3 calcColor(float4 params)
 }
 
 [shader("fragment")]
-void main_ps(float3 i_norm, float3 i_view, out float4 o_color : SV_Target0)
+void main_ps(
+    PS_INPUT input,
+    out float4 o_color : SV_Target0)
 {
     // Prepare input parameters
-    float3 view = normalize(i_view);
-    float3 norm = normalize(i_norm);
+    float3 view = normalize(input.view);
+    float3 norm = normalize(input.norm);
     float3 h = normalize(-gConst.lightDir.xyz + view);
 
     float NdotL = max(0.f, dot(norm, -gConst.lightDir.xyz));
@@ -56,7 +67,12 @@ void main_ps(float3 i_norm, float3 i_view, out float4 o_color : SV_Target0)
     float4 actualDisney = Disney(NdotL, NdotV, NdotH, LdotH, gConst.roughness);
 
     // Calculate approximated core shader
-    float4 outParams = DisneyMLP(NdotL, NdotV, NdotH, LdotH, gConst.roughness);
+    float4 outParams = DisneyMLP<NUM_HIDDEN_LAYERS, HIDDEN_NEURONS>(
+        NdotL, NdotV, NdotH, LdotH, gConst.roughness,
+        gMLPParams,
+        rtxns::UnpackArray<NUM_TRANSITIONS_ALIGN4, NUM_TRANSITIONS>(gConst.weightOffsets),
+        rtxns::UnpackArray<NUM_TRANSITIONS_ALIGN4, NUM_TRANSITIONS>(gConst.biasOffsets)
+    );
 
     o_color = float4((calcColor(actualDisney) - calcColor(outParams)) * NdotL * 4 + 0.5, 1.f);
 }

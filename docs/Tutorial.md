@@ -1,4 +1,4 @@
-# How to Write Your First Neural Shader
+# RTX Neural Shading: How to Write Your First Neural Shader
 
 ## Purpose
 
@@ -12,13 +12,13 @@ The main areas we will focus on are :
 
 3. Modifying the activation and loss functions
 
-It is outside the scope of this document to discuss how AI training and optimisation works and instead we will focus on modifying the existing sample to configure and train the network with different content.
+It is outside the scope of this document to discuss how AI training and optimization works and instead we will focus on modifying the existing sample to configure and train the network with different content.
 
 ## Extracting the Key Features for Training Input
 
-When implementing the Disney BRDF for use in the [Shader Training](ShaderTraining.md) example, the first task was feature extraction. Which features from the shader should be infered from the network and which should be calculated to ensure the network is not over specialised or overly complex. The network for the Disney BRDF takes inputs such as the `view`, `light` and `normal` vectors as well as  `material roughness`. Other variables, such as `light intensity`, `material metallicness` and various `material colour` components have been left as part of the shader. This is a balancing act which may require some experimentation.
+When implementing the Disney BRDF for use in the [Shader Training](ShaderTraining.md) example, the first task was feature extraction. Which features from the shader should be inferred from the network and which should be calculated to ensure the network is not over specialized or overly complex. The network for the Disney BRDF takes inputs such as the `view`, `light` and `normal` vectors as well as  `material roughness`. Other variables, such as `light intensity`, `material metallicness` and various `material color` components have been left as part of the shader. This is a balancing act which may require some experimentation.
 
-Once the key features are identified as potential training inputs, look to optimise them where possible by reducing their form and scaling them to be in the range `0-1` or `-1 - 1` which is preferred by networks. In the Disney BRDF, this was done by recognising that the input vectors where always normalised and used in their dot product form, so the inputs were reduced from 3 `float3` vectors, to 4 `float` dot products.
+Once the key features are identified as potential training inputs, look to optimize them where possible by reducing their form and scaling them to be in the range `0-1` or `-1 - 1` which is preferred by networks. In the Disney BRDF, this was done by recognizing that the input vectors where always normalized and used in their dot product form, so the inputs were reduced from 3 `float3` vectors, to 4 `float` dot products.
 
 Next, the network inputs may benefit from encoding which research has shown to improve the performance of the network. The library provides 2 encoders, `EncodeFrequency` and `EncodeTriangle` which encode the inputs into some form of wave function. The shader training example uses the frequency encoder which increases the number of inputs by a factor of 6 but provides a better network as a result. You should experiment with encoders to find the one suitable for your dataset.
 
@@ -73,7 +73,7 @@ var outputParams = model.forward(inputParams, hiddenActivation, finalActivation)
 
 The activation functions are passed into the models forward and backward pass (`ReLUAct` and `ExponentialAct`) for use with the `TrainingMLP` and `InferenceMLP`. These can be found in [CooperativeVectorFunctions.slang](../src/NeuralShading_Shaders/CooperativeVectorFunctions.slang) and extended as necessary. The current version of RTXNS provides a limited set of activation functions, but these can be examined and modified to support more activation functions as required.
 
-The choice of loss function to use will be dependant on your dataset. The Simple Training example uses a simple L2 loss function whereas the Shader Training example uses a more complex L2 relative loss function. Any loss function can be trivially coded in slang to help tune your shader.
+The choice of loss function to use will be dependent on your dataset. The Simple Training example uses a simple L2 loss function whereas the Shader Training example uses a more complex L2 relative loss function. Any loss function can be trivially coded in slang to help tune your shader.
 
 ## Hyper Parameters
 

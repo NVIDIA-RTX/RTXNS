@@ -1,4 +1,4 @@
-# SlangPy Training Example
+# RTX Neural Shading: SlangPy Training Example
 
 ## Purpose
 
@@ -338,11 +338,11 @@ Before we can set up training, we need to do a few things.
 First, we need to setup the optimizer. This needs the same amount of state as the [Simple Training](SimpleTraining.md) sample, but as a refresher, this is the signature of the optimizer function in `SlangpyTraining.slang` we intend to call later:
 ```
 void OptimizerStep(
-    RWStructuredBuffer<float> moments1,
-    RWStructuredBuffer<float> moments2,
-    RWStructuredBuffer<float> paramF,
-    RWStructuredBuffer<half> paramH,
-    RWStructuredBuffer<half> grad,
+    RWBuffer<float> moments1,
+    RWBuffer<float> moments2,
+    RWBuffer<float> paramF,
+    RWBuffer<half> paramH,
+    RWBuffer<half> grad,
     uint idx,
     float learningRate,
     float gradScale,
@@ -504,8 +504,8 @@ This takes the same generic parameters as the `TrainingMLP` used in the [Shader 
 Internally, the module stores all the information needed to create and evaluate a `TrainingMLP`:
 ```
 /* ... */
-    StructuredBuffer<T> parameters;
-    RWStructuredBuffer<T> derivatives; 
+    ByteAddressBuffer parameters;
+    RWByteAddressBuffer derivatives; 
     uint matrixOffsets[NumHiddenLayers + 1];
     uint biasOffsets[NumHiddenLayers + 1];
 

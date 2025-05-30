@@ -52,11 +52,11 @@ T SampleTexture<T : ITexelElement>(Texture2D<T> tex, float2 uv)
 
 // Take one step with the adam optimizer
 void OptimizerStep(
-    RWStructuredBuffer<float> moments1,
-    RWStructuredBuffer<float> moments2,
-    RWStructuredBuffer<float> paramF,
-    RWStructuredBuffer<half> paramH,
-    RWStructuredBuffer<half> grad,
+    RWBuffer<float> moments1,
+    RWBuffer<float> moments2,
+    RWBuffer<float> paramF,
+    RWBuffer<half> paramH,
+    RWBuffer<half> grad,
     uint idx,
     float learningRate,
     float gradScale,

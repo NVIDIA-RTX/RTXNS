@@ -14,11 +14,11 @@
 import Optimizers;
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
-RWStructuredBuffer<half> gMLPParams             :REGISTER_UAV(0, 0);
-RWStructuredBuffer<float> gMLPParamsf           :REGISTER_UAV(1, 0);
-RWStructuredBuffer<half> gMLPParamsGradients    :REGISTER_UAV(2, 0);
-RWStructuredBuffer<float> gMoments1             :REGISTER_UAV(3, 0);
-RWStructuredBuffer<float> gMoments2             :REGISTER_UAV(4, 0);
+RWBuffer<half> gMLPParams             :REGISTER_UAV(0, 0);
+RWBuffer<float> gMLPParamsf           :REGISTER_UAV(1, 0);
+RWBuffer<half> gMLPParamsGradients    :REGISTER_UAV(2, 0);
+RWBuffer<float> gMoments1             :REGISTER_UAV(3, 0);
+RWBuffer<float> gMoments2             :REGISTER_UAV(4, 0);
 
 [numthreads(32, 1, 1)]
 void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)

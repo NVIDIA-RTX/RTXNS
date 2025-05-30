@@ -16,6 +16,16 @@ set(folder "${LIBRARY_FILTER}/Utils")
 add_library(${project} STATIC EXCLUDE_FROM_ALL ${sources})
 target_include_directories(${project} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(${project} donut_app donut_engine NeuralShading)
+
+
+if (DONUT_WITH_DX12)
+    add_dependencies(${project} dx12-agility-sdk)
+    target_compile_definitions(
+		${project} PRIVATE DONUT_D3D_AGILITY_SDK_VERSION=${DONUT_D3D_AGILITY_SDK_VERSION}
+		${project} PRIVATE DONUT_D3D_AGILITY_PREVIEW_SDK_VERSION=${DONUT_D3D_AGILITY_PREVIEW_SDK_VERSION}
+	)
+endif()
+
 set_target_properties(${project} PROPERTIES 
 	FOLDER ${folder}
 )

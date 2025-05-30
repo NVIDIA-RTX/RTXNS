@@ -8,7 +8,6 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#include "Disney.h"
 #include "NetworkConfig.h"
 #include <donut/shaders/binding_helpers.hlsli>
 
@@ -19,10 +18,11 @@ import Activation;
 import MLP;
 import Loss;
 import PCG32;
+import Disney;
 
 DECLARE_CBUFFER(TrainingConstantBufferEntry, gConst, 0, 0);
-StructuredBuffer<half> gMLPParams               : REGISTER_SRV(0, 0);
-RWStructuredBuffer<half> gMLPParamsGradients    : REGISTER_UAV(0, 0);
+ByteAddressBuffer gMLPParams               : REGISTER_SRV(0, 0);
+RWByteAddressBuffer gMLPParamsGradients    : REGISTER_UAV(0, 0);
 
 [shader("compute")]
 [numthreads(64, 1, 1)] 

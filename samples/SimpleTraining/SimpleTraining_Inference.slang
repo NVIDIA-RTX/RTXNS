@@ -16,13 +16,13 @@ import Utils;
 import LinearOps;
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
-StructuredBuffer<half> gMLPParams   :REGISTER_SRV(0, 0);
-Texture2D<float4> inputTexture      :REGISTER_SRV(1, 0);
-RWTexture2D<float4> outputTexture   :REGISTER_UAV(0, 0);
+ByteAddressBuffer gMLPParams            :REGISTER_SRV(0, 0);
+Texture2D<float4> inputTexture          :REGISTER_SRV(1, 0);
+RWTexture2D<float4> outputTexture       :REGISTER_UAV(0, 0);
 
 [shader("compute")]
 [numthreads(8, 8, 1)] 
-void main_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
+void inference_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     // Set the input ID as the uv coordinate and frequency encode it for the network
     float2 inputUV = float2(dispatchThreadID.x / float(gConst.imageWidth), dispatchThreadID.y / float(gConst.imageHeight));
