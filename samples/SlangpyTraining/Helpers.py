@@ -8,7 +8,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 #
-from slangpy.backend import Device, DeviceType, TextureLoader, Bitmap, SlangCompilerOptions
 import slangpy as spy
 from pathlib import Path
 from typing import Any, Union
@@ -72,9 +71,9 @@ class SDKSample:
     
     # Create an sgl device and setup default include directories
     def _create_device(self):
-        device = Device(
-            type=DeviceType.vulkan,
-            compiler_options=SlangCompilerOptions({
+        device = spy.Device(
+            type=spy.DeviceType.vulkan,
+            compiler_options=spy.SlangCompilerOptions({
                 "include_paths": self.include_dirs,
                 "disable_warnings": [
                     "41018", # Overzealous uninitialized-out-parameter warning
@@ -88,8 +87,8 @@ class SDKSample:
         return device
     
     def load_texture(self, path: Union[str,Path]):
-        bmp = Bitmap(self.sdk_data_dir / path)
-        loader = TextureLoader(self.device)
+        bmp = spy.Bitmap(self.sdk_data_dir / path)
+        loader = spy.TextureLoader(self.device)
         target_tex = loader.load_texture(bmp, {"load_as_normalized": True})
         return target_tex
     

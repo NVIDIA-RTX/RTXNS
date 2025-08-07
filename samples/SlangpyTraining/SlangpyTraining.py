@@ -7,9 +7,8 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from slangpy.backend import DataType
-from slangpy.core.module import Module
-from slangpy.types import NDBuffer, call_id
+import slangpy as spy
+
 import numpy as np
 import json
 import math
@@ -53,7 +52,7 @@ def training_main():
 
     # A basic MLP with ReLU activations and a linear output that maps a 2D UV input
     # to an RGB color. This is a good baseline, but it won't achieve state-of-the-art
-    basic_mlp = TrainableMLP(device, DataType.float16,
+    basic_mlp = TrainableMLP(device, spy.DataType.float16,
                              num_hidden_layers=3,
                              input_width=2,
                              hidden_width=32,
@@ -63,7 +62,7 @@ def training_main():
 
     # Replacing ReLU with LeakyReLU makes training more stable for small networks,
     # and a Sigmoid activation at the output helps bring the network into the right range
-    better_activations = TrainableMLP(device, DataType.float16,
+    better_activations = TrainableMLP(device, spy.DataType.float16,
                                       num_hidden_layers=3,
                                       input_width=2,
                                       hidden_width=32,
@@ -74,10 +73,10 @@ def training_main():
     # For 2D or 3D inputs, we can do even better with an input encoding
     # We need to adjust the input width of the MLP to take the additional
     # outputs from the encoding
-    encoding = FrequencyEncoding(DataType.float16, 2, 3)
+    encoding = FrequencyEncoding(spy.DataType.float16, 2, 3)
     mlp_with_encoding = ModuleChain(
         encoding,
-        TrainableMLP(device, DataType.float16,
+        TrainableMLP(device, spy.DataType.float16,
                      num_hidden_layers=3,
                      input_width=encoding.fan_out,
                      hidden_width=32,
@@ -94,7 +93,7 @@ def training_main():
     # Now take the working model and scale up the number of weights by adding another layer
     larger_mlp = ModuleChain(
         encoding,
-        TrainableMLP(device, DataType.float16,
+        TrainableMLP(device, spy.DataType.float16,
                      num_hidden_layers=4,
                      input_width=encoding.fan_out,
                      hidden_width=32,
@@ -119,7 +118,7 @@ def training_main():
     ##
     target_tex = sample.load_texture("nvidia-logo.png")
 
-    module = Module.load_from_file(device, "SlangpyTraining.slang")
+    module = spy.Module.load_from_file(device, "SlangpyTraining.slang")
 
     # Instantiate the slang RNG from the loaded module,
     # seeded with a random buffer of uints
@@ -131,7 +130,7 @@ def training_main():
     vis_resolution = 256
     span = np.linspace(0, 1, vis_resolution, dtype=np.float32)
     vis_uvs_np = np.stack(np.broadcast_arrays(span[None, :], span[:, None]), axis=2)
-    vis_uvs = NDBuffer(device, module.float2.struct, shape=(vis_resolution, vis_resolution))
+    vis_uvs = spy.NDBuffer(device, module.float2.struct, shape=(vis_resolution, vis_resolution))
     vis_uvs.copy_from_numpy(vis_uvs_np)
 
     # Create a figure to fill out as we go
@@ -169,8 +168,8 @@ def training_main():
 
         # These match up with the argument names of optimizerStep in texture-training.slang
         optimizer_state = {
-            "moments1": NDBuffer.zeros_like(parametersF),
-            "moments2": NDBuffer.zeros_like(parametersF),
+            "moments1": spy.NDBuffer.zeros_like(parametersF),
+            "moments2": spy.NDBuffer.zeros_like(parametersF),
             "paramF": parametersF,
             "paramH": parameters,
             "grad": grads,
@@ -190,22 +189,21 @@ def training_main():
         for epoch in range(num_epochs):
             start = time.time()
 
-            cmd = device.create_command_buffer()
-            cmd.open()
+            cmd = device.create_command_encoder()
+            #cmd.begin_compute_pass()
             # Each batch is submitted to a command buffer
             for batch in range(num_batches_per_epoch):
                 # Compute gradients
                 train_texture.append_to(cmd, model, rng, target_tex, loss_scale)
                 # Do one parameter optimization step using those gradients
-                optimizer_step.append_to(cmd, idx=call_id((num_params, )), iteration=iteration, **optimizer_state)
+                optimizer_step.append_to(cmd, idx=spy.call_id((num_params, )), iteration=iteration, **optimizer_state)
+                #optimizer_step.append_to(cmd, idx=spy.call_id((num_params, )), iteration=iteration, moments1=optimizer_state["moments1"])
                 iteration += 1
-            cmd.close()
-            device.submit_command_buffer(cmd)
+
+            device.submit_command_buffer(cmd.finish())
             device.wait()
             end = time.time()
 
-            device.run_garbage_collection()
-            
             # Print out progress info
             elapsed = end - start
             num_samples_per_epoch = math.prod(batch_shape) * num_batches_per_epoch

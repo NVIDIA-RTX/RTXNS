@@ -31,7 +31,6 @@
 
 #include "DeviceUtils.h"
 #include "GraphicsResources.h"
-#include "CoopVector.h"
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
 #include "DirectoryHelper.h"
@@ -53,11 +52,11 @@ struct UIData
     std::string fileName;
 };
 
-class SimpleTraining : public app::ApplicationBase
+class SlangpyInference : public app::ApplicationBase
 {
 
 public:
-    SimpleTraining(app::DeviceManager* deviceManager, UIData* ui) : ApplicationBase(deviceManager), m_uiParams(ui)
+    SlangpyInference(app::DeviceManager* deviceManager, UIData* ui) : ApplicationBase(deviceManager), m_uiParams(ui)
     {
     }
 
@@ -454,7 +453,7 @@ int main(int __argc, const char** __argv)
         uiData.fileName = (GetLocalPath("assets/data") / "slangpy-weights.json").generic_string();
         uiData.load = true;
 
-        SimpleTraining example(deviceManager, &uiData);
+        SlangpyInference example(deviceManager, &uiData);
         UserInterface gui(deviceManager, &uiData);
         for (int i = 1; i < __argc; ++i)
         {

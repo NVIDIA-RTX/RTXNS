@@ -25,6 +25,7 @@
 #include "GraphicsResources.h"
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
+#include "Float16.h"
 
 #include <iostream>
 #include <fstream>

@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "CoopVector.h"
 #include <vector>
 #include <filesystem>
 #include <nvrhi/utils.h>
@@ -54,7 +53,7 @@ public:
                         nvrhi::CommandListHandle commandList);
 
 private:
-    std::unique_ptr<ICoopVectorUtils> m_coopVecUtils;
+    nvrhi::DeviceHandle m_device;
 };
 
 // Represent a host side neural network.

@@ -16,7 +16,7 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 [CMake v3.24.3][CMake] **|** [VS 2022][VS22] **|** [Slang v2025.10](https://shader-slang.com/tools/)
 
 ### DirectX
-[DirectX Preview Agility SDK 1.717.0-preview](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.717.0-preview) **|** [Microsoft DXC 1.8.2505.28](https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2505.28) **|** [Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver) 
+[DirectX Preview Agility SDK 1.717.0-preview](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.717.0-preview) **|** [Microsoft DXC 1.8.2505.28](https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2505.28) **|** [Geforce Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver)  **|** [Quadro Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/assets/secure/shadermodel6-9-preview-driver-quadro) 
 
 ### Vulkan
 GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** Public Driver ≥ 572.16

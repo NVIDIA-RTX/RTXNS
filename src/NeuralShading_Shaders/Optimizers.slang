@@ -14,17 +14,46 @@
 
 namespace optimizers
 {
+    // Common interface for buffer accessors
+    interface IBufferAccessor
+    {
+        float get(uint index);
+        void set(uint index, float value);
+    };
+
+    // Accessor for RWBuffer
+    struct RWBufferAccessor : IBufferAccessor
+    {
+        RWBuffer<float> m_buffer;
+        
+        __init(RWBuffer<float> buffer)
+        {
+            m_buffer = buffer;
+        }
+
+        float get(uint index)
+        {
+            return m_buffer[index];
+        }
+
+        void set(uint index, float value)
+        {
+            m_buffer[index] = value;
+        }
+    };
+
     // Common interface for optimizers
     interface IOptimizer
     {
         float step(float weightBias, uint parameterID, float gradient, const float currentStep);
     };
 
-    // Adam optimizer 
-    struct Adam : IOptimizer
+    // Adam optimizer using a generic buffer accessor
+    // This allows using different buffer types (e.g., RWBuffer, RWNDBuffer
+    struct AdamAccessor<T : IBufferAccessor> : IOptimizer
     {
-        RWBuffer<float> m_moments1;
-        RWBuffer<float> m_moments2;
+        T m_moments1;
+        T m_moments2;
         float m_learningRate;
         float m_lossScale;
         float m_beta1;
@@ -33,8 +62,8 @@ namespace optimizers
 
         // Initializes from two moments buffers and optimizations parameters
         __init(
-            RWBuffer<float> moments1, 
-            RWBuffer<float> moments2,
+            T moments1, 
+            T moments2,
             float learningRate, 
             float lossScale,
             float beta1 = ADAM_BETA1,
@@ -55,8 +84,8 @@ namespace optimizers
         {
             gradient /= m_lossScale;
             float gradient_sq = gradient * gradient;
-            float moment1 = m_moments1[parameterID] * m_beta1 + gradient * (1 - m_beta1);
-            float moment2 = m_moments2[parameterID] * m_beta2 + gradient_sq * (1 - m_beta2);
+            float moment1 = m_moments1.get(parameterID) * m_beta1 + gradient * (1 - m_beta1);
+            float moment2 = m_moments2.get(parameterID) * m_beta2 + gradient_sq * (1 - m_beta2);
 
             float bias_correction1 = 1 - pow(m_beta1, (float) currentStep);
             float bias_correction2 = 1 - pow(m_beta2, (float) currentStep);
@@ -66,9 +95,32 @@ namespace optimizers
 
             float adjustedWeightbias = weightBias - (moment1 / denom) * step_size;
 
-            m_moments1[parameterID] = moment1;
-            m_moments2[parameterID] = moment2;
+            m_moments1.set(parameterID, moment1);
+            m_moments2.set(parameterID, moment2);
             return adjustedWeightbias;
+        }
+    };
+
+    // Adam optimizer using RWBuffer specifically
+    struct Adam : IOptimizer
+    {
+        AdamAccessor<RWBufferAccessor> m_accessor;
+
+        __init(
+            RWBuffer<float> moments1, 
+            RWBuffer<float> moments2,
+            float learningRate, 
+            float lossScale,
+            float beta1 = ADAM_BETA1,
+            float beta2 = ADAM_BETA2,
+            float epsilon = ADAM_EPSILON)
+        {
+            m_accessor = AdamAccessor<RWBufferAccessor>(RWBufferAccessor(moments1), RWBufferAccessor(moments2), learningRate, lossScale, beta1, beta2, epsilon);
+        }
+
+        float step(in float weightBias, uint parameterID, float gradient, const float currentStep)
+        {
+            return m_accessor.step(weightBias, parameterID, gradient, currentStep);
         }
     };
 };

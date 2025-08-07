@@ -11,9 +11,35 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
+ import slangpy;
+
 __exported import NeuralModules;
 __exported import Loss;
 __exported import Optimizers;
+
+#define ADAM_BETA1                               0.9f
+#define ADAM_BETA2                               0.999f
+#define ADAM_EPSILON                             1E-8f
+
+struct RWNDBufferAccessor : optimizers::IBufferAccessor
+{
+    RWNDBuffer<float, 1> m_buffer;
+    
+    __init(RWNDBuffer<float, 1> buffer)
+    {
+        m_buffer = buffer;
+    }
+
+    float get(uint index)
+    {
+        return m_buffer[index];
+    }
+
+    void set(uint index, float value)
+    {
+        m_buffer[index] = value;
+    }
+};
 
 struct RNG
 {
@@ -52,18 +78,17 @@ T SampleTexture<T : ITexelElement>(Texture2D<T> tex, float2 uv)
 
 // Take one step with the adam optimizer
 void OptimizerStep(
-    RWBuffer<float> moments1,
-    RWBuffer<float> moments2,
-    RWBuffer<float> paramF,
-    RWBuffer<half> paramH,
-    RWBuffer<half> grad,
+    RWNDBuffer<float, 1> moments1,
+    RWNDBuffer<float, 1> moments2,
+    RWNDBuffer<float, 1> paramF,
+    RWNDBuffer<half, 1> paramH,
+    RWNDBuffer<half, 1> grad,
     uint idx,
     float learningRate,
     float gradScale,
     int iteration)
 {
-    var optimizer = optimizers::Adam(moments1, moments2, learningRate, gradScale);
-
+    var optimizer = optimizers::AdamAccessor<RWNDBufferAccessor>(RWNDBufferAccessor(moments1), RWNDBufferAccessor(moments2), learningRate, gradScale);
     // Parameters are converted to FP16 for computing gradients,
     // but we keep the FP32 originals around so we don't accumulate
     // rounding errors

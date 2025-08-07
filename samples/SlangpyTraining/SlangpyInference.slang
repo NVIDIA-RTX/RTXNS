@@ -11,7 +11,7 @@
 #include "NetworkConfig.h"
 #include <donut/shaders/binding_helpers.hlsli>
 
-import SlangpyTraining;
+__exported import NeuralModules;
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
 ByteAddressBuffer gMLPParams        :REGISTER_SRV(0, 0);

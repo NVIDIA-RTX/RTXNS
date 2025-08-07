@@ -11,8 +11,10 @@
 #include <fstream>
 #include <sstream>
 #include <random>
+#include <donut/core/log.h>
 #include <donut/core/json.h>
 #include "NeuralNetwork.h"
+#include "Float16.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -41,21 +43,43 @@ struct NetworkFileHeader
 
 } // namespace
 
-NetworkUtilities::NetworkUtilities(nvrhi::DeviceHandle device)
+static nvrhi::coopvec::DataType GetNvrhiDataType(Precision precision)
 {
-#if DONUT_WITH_VULKAN
-    if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
+    switch (precision)
     {
-        m_coopVecUtils = std::make_unique<CoopVectorUtils_VK>(device->getNativeObject(nvrhi::ObjectTypes::VK_Device));
+    case Precision::F16:
+        return nvrhi::coopvec::DataType::Float16;
+    case Precision::F32:
+        return nvrhi::coopvec::DataType::Float32;
+    default:
+        assert(false && "Unsupported precision");
+        return nvrhi::coopvec::DataType::Float16; // Default to F16
     }
-#endif
-#if DONUT_WITH_DX12
-    if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::D3D12)
+}
+
+static nvrhi::coopvec::MatrixLayout GetNvrhiMatrixLayout(MatrixLayout layout)
+{
+    switch (layout)
     {
-        m_coopVecUtils = std::make_unique<CoopVectorUtils_DX12>(device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device));
+    case MatrixLayout::RowMajor:
+        return nvrhi::coopvec::MatrixLayout::RowMajor;
+    case MatrixLayout::ColumnMajor:
+        return nvrhi::coopvec::MatrixLayout::ColumnMajor;
+    case MatrixLayout::InferencingOptimal:
+        return nvrhi::coopvec::MatrixLayout::InferencingOptimal;
+    case MatrixLayout::TrainingOptimal:
+        return nvrhi::coopvec::MatrixLayout::TrainingOptimal;
+    default:
+        assert(false && "Unsupported matrix layout");
+        return nvrhi::coopvec::MatrixLayout::RowMajor; // Default to RowMajor
     }
-#endif
-    assert(m_coopVecUtils && "Failed to create CoopVec Utility");
+}
+
+constexpr size_t s_matrixAlignment = 64; ///< Minimum byte alignment according to spec.
+constexpr size_t s_vectorAlignment = 16; ///< Minimum byte alignment according to spec.
+
+NetworkUtilities::NetworkUtilities(nvrhi::DeviceHandle device) : m_device(device)
+{
 }
 
 bool rtxns::NetworkUtilities::ValidateNetworkArchitecture(NetworkArchitecture const& netArch)
@@ -126,22 +150,22 @@ void NetworkUtilities::SetNetworkLayerSizes(NetworkLayout& layout)
     for (int i = 0; i < layout.networkLayers.size(); i++)
     {
         NetworkLayer& layer = layout.networkLayers[i];
-        layer.weightSize = m_coopVecUtils->QueryMatrixByteSize(layer.outputs, layer.inputs, layout.matrixLayout, layout.matrixPrecision);
+        layer.weightSize = m_device->getCoopVecMatrixSize(GetNvrhiDataType(layout.matrixPrecision), GetNvrhiMatrixLayout(layout.matrixLayout), layer.outputs, layer.inputs);
         layer.biasSize = layer.outputs * GetSize(layout.matrixPrecision);
 
-        offset = align_to(m_coopVecUtils->GetMatrixAlignment(), offset);
+        offset = align_to(s_matrixAlignment, offset);
         layer.weightOffset = (uint32_t)offset;
         offset += layer.weightSize;
 
-        offset = align_to(m_coopVecUtils->GetVectorAlignment(), offset);
+        offset = align_to(s_vectorAlignment, offset);
         layer.biasOffset = (uint32_t)offset;
         offset += layer.biasSize;
     }
-    offset = align_to(m_coopVecUtils->GetMatrixAlignment(), offset);
+    offset = align_to(s_matrixAlignment, offset);
     layout.networkSize = offset;
 }
 
-// Returns a updated network layout where the weights and bias size / offsets have been update
+// Returns an updated network layout where the weights and bias size / offsets have been update
 // for the new matrix layout..
 // Can be device optimal matrix layout
 rtxns::NetworkLayout NetworkUtilities::GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout)
@@ -170,22 +194,56 @@ void NetworkUtilities::ConvertWeights(NetworkLayout const& srcLayout,
                                       nvrhi::DeviceHandle device,
                                       nvrhi::CommandListHandle commandList)
 {
-    // Unwrap the command list and buffer objects from NVRHI
-    bool const isVulkan = device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
-    nvrhi::ObjectType const commandListType = isVulkan ? nvrhi::ObjectTypes::VK_CommandBuffer : nvrhi::ObjectTypes::D3D12_GraphicsCommandList;
-    nvrhi::ObjectType const bufferType = isVulkan ? nvrhi::ObjectTypes::VK_Buffer : nvrhi::ObjectTypes::D3D12_Resource;
+    assert(srcLayout.networkLayers.size() == dstLayout.networkLayers.size());
 
-    void* nativeCommandList = commandList->getNativeObject(commandListType);
-    void* nativeSrcBuffer = srcBuffer->getNativeObject(bufferType);
-    void* nativeDstBuffer = dstBuffer->getNativeObject(bufferType);
+    std::vector<nvrhi::coopvec::ConvertMatrixLayoutDesc> convertDescs;
+    convertDescs.reserve(srcLayout.networkLayers.size() * 2); // Each layer has weights and biases
 
-    // Set required barriers
-    commandList->setBufferState(srcBuffer, nvrhi::ResourceStates::ShaderResource);
-    commandList->setBufferState(dstBuffer, nvrhi::ResourceStates::UnorderedAccess);
-    commandList->commitBarriers();
+    for (size_t layer = 0; layer < srcLayout.networkLayers.size(); ++layer)
+    {
+        const auto& srcLayer = srcLayout.networkLayers[layer];
+        const auto& dstLayer = dstLayout.networkLayers[layer];
 
-    // Convert the matrix parameters on the device
-    m_coopVecUtils->ConvertDeviceMatrixLayout(srcLayout, dstLayout, nativeSrcBuffer, 0, nativeDstBuffer, 0, nativeCommandList);
+        assert(srcLayer.inputs == dstLayer.inputs);
+        assert(srcLayer.outputs == dstLayer.outputs);
+        assert(srcLayer.biasSize == dstLayer.biasSize);
+
+        nvrhi::coopvec::ConvertMatrixLayoutDesc& weightDesc = convertDescs.emplace_back();
+
+        weightDesc.numRows = srcLayer.outputs;
+        weightDesc.numColumns = srcLayer.inputs;
+
+        weightDesc.src.buffer = srcBuffer;
+        weightDesc.src.offset = srcBufferOffset + srcLayer.weightOffset;
+        weightDesc.src.type = GetNvrhiDataType(srcLayout.matrixPrecision);
+        weightDesc.src.layout = GetNvrhiMatrixLayout(srcLayout.matrixLayout);
+        weightDesc.src.size = srcLayer.weightSize;
+
+        weightDesc.dst.buffer = dstBuffer;
+        weightDesc.dst.offset = dstBufferOffset + dstLayer.weightOffset;
+        weightDesc.dst.type = GetNvrhiDataType(dstLayout.matrixPrecision);
+        weightDesc.dst.layout = GetNvrhiMatrixLayout(dstLayout.matrixLayout);
+        weightDesc.dst.size = dstLayer.weightSize;
+
+        nvrhi::coopvec::ConvertMatrixLayoutDesc& biasDesc = convertDescs.emplace_back();
+
+        biasDesc.numRows = 1;
+        biasDesc.numColumns = uint32_t(srcLayer.biasSize / GetSize(srcLayout.matrixPrecision));
+
+        biasDesc.src.buffer = srcBuffer;
+        biasDesc.src.offset = srcBufferOffset + srcLayer.biasOffset;
+        biasDesc.src.type = GetNvrhiDataType(srcLayout.matrixPrecision);
+        biasDesc.src.layout = nvrhi::coopvec::MatrixLayout::RowMajor;
+        biasDesc.src.size = srcLayer.biasSize;
+
+        biasDesc.dst.buffer = dstBuffer;
+        biasDesc.dst.offset = dstBufferOffset + dstLayer.biasOffset;
+        biasDesc.dst.type = GetNvrhiDataType(dstLayout.matrixPrecision);
+        biasDesc.dst.layout = nvrhi::coopvec::MatrixLayout::RowMajor;
+        biasDesc.dst.size = dstLayer.biasSize;
+    }
+
+    commandList->convertCoopVecMatrices(convertDescs.data(), convertDescs.size());
 }
 
 HostNetwork::HostNetwork(std::shared_ptr<NetworkUtilities> networkUtils) : m_networkUtils(networkUtils)
@@ -241,9 +299,17 @@ bool HostNetwork::InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::str
         return false;
     }
 
-    Json::Value jChannels = js["channels"];
-    std::vector<int> channels(jChannels.size());
-    transform(jChannels.begin(), jChannels.end(), channels.begin(), [](const auto& e) { return e.asInt(); });
+    Json::Value jsonLayers = js["layers"];
+
+    std::vector<int> channels;
+    for (const auto& layer : jsonLayers)
+    {
+        if (channels.empty())
+        {
+            channels.push_back(layer["num_inputs"].asInt());
+        }
+        channels.push_back(layer["num_outputs"].asInt());
+    }
 
     uint32_t numLayers = (uint32_t)channels.size() - 1;
 
@@ -269,7 +335,6 @@ bool HostNetwork::InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::str
     m_networkLayout = m_networkUtils->CreateHostNetworkLayout(m_networkArchitecture);
 
     // Copy weights and biases into host side format, stored contiguously in one buffer.
-    Json::Value jsonLayers = js["layers"];
     m_networkParams.clear();
     m_networkParams.resize(m_networkLayout.networkSize, 0);
 
@@ -278,7 +343,8 @@ bool HostNetwork::InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::str
         const NetworkLayer& layer = m_networkLayout.networkLayers[ii];
 
         // Copy weights into host layout.
-        Json::Value jWeights = jsonLayers["layer_" + std::to_string(ii) + "_w"];
+        Json::Value jWeights = jsonLayers[ii]["weights"];
+
         assert(jWeights.size() == layer.inputs * layer.outputs && "Unexpected number of weights");
 
         std::vector<uint16_t> weights16(jWeights.size());
@@ -286,7 +352,7 @@ bool HostNetwork::InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::str
         std::memcpy(m_networkParams.data() + layer.weightOffset, weights16.data(), layer.weightSize);
 
         // Copy biases into host layout.
-        Json::Value jBiases = jsonLayers["layer_" + std::to_string(ii) + "_b"];
+        Json::Value jBiases = jsonLayers[ii]["biases"];
         assert(jBiases.size() == layer.outputs && "Unexpected number of biases");
 
         std::vector<uint16_t> bias16(jBiases.size());

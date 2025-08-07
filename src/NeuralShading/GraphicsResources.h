@@ -35,8 +35,5 @@ public:
 
 private:
     CoopVectorFeatures m_coopVectorFeatures;
-#if DONUT_WITH_VULKAN
-    PFN_vkGetPhysicalDeviceCooperativeVectorPropertiesNV m_vkGetPhysicalDeviceCooperativeVectorPropertiesNV = nullptr;
-#endif
 };
 } // namespace rtxns

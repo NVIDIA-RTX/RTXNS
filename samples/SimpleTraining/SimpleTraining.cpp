@@ -31,7 +31,6 @@
 
 #include "DeviceUtils.h"
 #include "GraphicsResources.h"
-#include "CoopVector.h"
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
 #include "DirectoryHelper.h"

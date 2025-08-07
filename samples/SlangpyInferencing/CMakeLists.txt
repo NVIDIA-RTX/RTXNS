@@ -20,10 +20,10 @@ set(SHADER_COMPILE_OPTIONS_SPIRV " -X \"-Wno-41017 -capability spvCooperativeVec
 
 set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
 
-set(project SlangpyTraining)
-set(folder "Samples/SlangpyTraining")
+set(project SlangpyInferencing)
+set(folder "Samples/SlangpyInferencing")
 
-list(APPEND ${project}_shaders ${CMAKE_CURRENT_SOURCE_DIR}/SlangpyTraining.slang)
+file(GLOB_RECURSE ${project}_shaders "*.hlsl" "*.hlsli" "*.slang")
 file(GLOB_RECURSE ${project}_sources "*.cpp" "*.h" "*.md")
 
 donut_compile_shaders_all_platforms(
