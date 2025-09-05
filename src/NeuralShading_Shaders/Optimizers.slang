@@ -14,6 +14,11 @@
 
 namespace optimizers
 {
+    float sanitize(float x, float fallback = 0.0f)
+    {
+        return (isnan(x) || isinf(x)) ? fallback : x;
+    }
+
     // Common interface for buffer accessors
     interface IBufferAccessor
     {
@@ -83,6 +88,8 @@ namespace optimizers
         float step(in float weightBias, uint parameterID, float gradient, const float currentStep)
         {
             gradient /= m_lossScale;
+            gradient = sanitize(gradient);
+            
             float gradient_sq = gradient * gradient;
             float moment1 = m_moments1.get(parameterID) * m_beta1 + gradient * (1 - m_beta1);
             float moment2 = m_moments2.get(parameterID) * m_beta2 + gradient_sq * (1 - m_beta2);
@@ -97,6 +104,7 @@ namespace optimizers
 
             m_moments1.set(parameterID, moment1);
             m_moments2.set(parameterID, moment2);
+
             return adjustedWeightbias;
         }
     };

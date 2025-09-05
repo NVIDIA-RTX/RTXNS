@@ -10,6 +10,10 @@
 
 #pragma once
 
+#if DONUT_WITH_DX12
+#include <wrl/client.h>
+#endif
+
 #include "GraphicsResources.h"
 #include <donut/app/DeviceManager.h>
 #include <donut/core/log.h>
@@ -33,6 +37,24 @@ GraphicsResources::GraphicsResources(nvrhi::DeviceHandle device)
             break;
         }
     }
+#if DONUT_WITH_DX12
+    if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::D3D12)
+    {
+        // Mute preview shader model (6.9) validation warning.
+        ID3D12Device* d3d12Device = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+        Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue;
+        if (d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)) == S_OK)
+        {
+            D3D12_MESSAGE_ID denyIds[] = { D3D12_MESSAGE_ID_NON_RETAIL_SHADER_MODEL_WONT_VALIDATE };
+
+            D3D12_INFO_QUEUE_FILTER filter = {};
+            filter.DenyList.NumIDs = _countof(denyIds);
+            filter.DenyList.pIDList = denyIds;
+
+            infoQueue->AddStorageFilterEntries(&filter);
+        }
+    }
+#endif
 }
 
 GraphicsResources::~GraphicsResources()

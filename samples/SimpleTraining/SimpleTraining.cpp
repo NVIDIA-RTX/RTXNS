@@ -34,6 +34,7 @@
 #include "GeometryUtils.h"
 #include "NeuralNetwork.h"
 #include "DirectoryHelper.h"
+#include "LearningRateScheduler.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -51,6 +52,8 @@ struct UIData
     std::string fileName;
     float trainingTime = 0.0f;
     uint32_t epochs = 0;
+    uint32_t adamSteps = 0;
+    float learningRate = 0.0f;
     NetworkTransform networkTransform = NetworkTransform::Identity;
 };
 
@@ -273,6 +276,8 @@ public:
         pipelineDesc.CS = m_ConvertWeightsPass.m_ShaderCS;
         m_ConvertWeightsPass.m_Pipeline = GetDevice()->createComputePipeline(pipelineDesc);
 
+        m_learningRateScheduler = std::make_unique<LearningRateScheduler>(BASE_LEARNING_RATE, MIN_LEARNING_RATE, WARMUP_LEARNING_STEPS, FLAT_LEARNING_STEPS, DECAY_LEARNING_STEPS);
+
         return true;
     }
 
@@ -433,8 +438,8 @@ public:
         neuralConstants.imageWidth = m_InferenceTexture->getDesc().width;
         neuralConstants.imageHeight = m_InferenceTexture->getDesc().height;
         neuralConstants.maxParamSize = m_TotalParamCount;
-        neuralConstants.learningRate = m_LearningRate;
         neuralConstants.currentStep = m_AdamCurrentStep;
+        neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_AdamCurrentStep);
         neuralConstants.batchSizeX = BATCH_SIZE_X;
         neuralConstants.batchSizeY = BATCH_SIZE_Y;
         neuralConstants.networkTransform = m_uiParams->networkTransform;
@@ -479,9 +484,12 @@ public:
                 m_commandList->endMarker();
 
                 neuralConstants.currentStep = ++m_AdamCurrentStep;
+                neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_AdamCurrentStep);
                 m_commandList->writeBuffer(m_NeuralConstantBuffer, &neuralConstants, sizeof(neuralConstants));
             }
             m_uiParams->epochs++;
+            m_uiParams->adamSteps = m_AdamCurrentStep;
+            m_uiParams->learningRate = neuralConstants.learningRate;
         }
 
         {
@@ -587,9 +595,10 @@ private:
     std::unique_ptr<rtxns::HostNetwork> m_neuralNetwork;
     rtxns::NetworkLayout m_deviceNetworkLayout;
 
+    std::unique_ptr<LearningRateScheduler> m_learningRateScheduler;
+
     uint m_TotalParamCount = 0;
     uint m_AdamCurrentStep = 1;
-    float m_LearningRate = LEARNING_RATE;
     bool m_convertWeights = true;
 
     UIData* m_uiParams;
@@ -613,7 +622,10 @@ public:
                                   "Zoom\0"
                                   "X/Y Flip\0");
         ImGui::Text("Epochs : %d", m_uiParams->epochs);
+        ImGui::Text("Adam Steps : %d", m_uiParams->adamSteps);
         ImGui::Text("Training Time : %.2f s", m_uiParams->trainingTime);
+        ImGui::Text("Learning Rate : %.9f", m_uiParams->learningRate);
+
         if (ImGui::Button(m_uiParams->training ? "Disable Training" : "Enable Training"))
         {
             m_uiParams->training = !m_uiParams->training;
