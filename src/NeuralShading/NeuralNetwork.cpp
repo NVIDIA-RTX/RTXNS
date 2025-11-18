@@ -218,12 +218,28 @@ void NetworkUtilities::ConvertWeights(NetworkLayout const& srcLayout,
         weightDesc.src.type = GetNvrhiDataType(srcLayout.matrixPrecision);
         weightDesc.src.layout = GetNvrhiMatrixLayout(srcLayout.matrixLayout);
         weightDesc.src.size = srcLayer.weightSize;
+        if (srcLayout.matrixLayout == MatrixLayout::RowMajor)
+        {
+            weightDesc.src.stride = uint32_t(srcLayer.inputs * GetSize(srcLayout.matrixPrecision));
+		}
+        else if (srcLayout.matrixLayout == MatrixLayout::ColumnMajor)
+        {
+            weightDesc.src.stride = uint32_t(srcLayer.outputs * GetSize(srcLayout.matrixPrecision));
+		}
 
         weightDesc.dst.buffer = dstBuffer;
         weightDesc.dst.offset = dstBufferOffset + dstLayer.weightOffset;
         weightDesc.dst.type = GetNvrhiDataType(dstLayout.matrixPrecision);
         weightDesc.dst.layout = GetNvrhiMatrixLayout(dstLayout.matrixLayout);
         weightDesc.dst.size = dstLayer.weightSize;
+        if (dstLayout.matrixLayout == MatrixLayout::RowMajor)
+        {
+            weightDesc.dst.stride = uint32_t(dstLayer.inputs * GetSize(dstLayout.matrixPrecision));
+        }
+        else if (dstLayout.matrixLayout == MatrixLayout::ColumnMajor)
+        {
+            weightDesc.dst.stride = uint32_t(dstLayer.outputs * GetSize(dstLayout.matrixPrecision));
+		}
 
         nvrhi::coopvec::ConvertMatrixLayoutDesc& biasDesc = convertDescs.emplace_back();
 
@@ -235,12 +251,14 @@ void NetworkUtilities::ConvertWeights(NetworkLayout const& srcLayout,
         biasDesc.src.type = GetNvrhiDataType(srcLayout.matrixPrecision);
         biasDesc.src.layout = nvrhi::coopvec::MatrixLayout::RowMajor;
         biasDesc.src.size = srcLayer.biasSize;
+        biasDesc.src.stride = biasDesc.src.size;
 
         biasDesc.dst.buffer = dstBuffer;
         biasDesc.dst.offset = dstBufferOffset + dstLayer.biasOffset;
         biasDesc.dst.type = GetNvrhiDataType(dstLayout.matrixPrecision);
         biasDesc.dst.layout = nvrhi::coopvec::MatrixLayout::RowMajor;
         biasDesc.dst.size = dstLayer.biasSize;
+        biasDesc.src.stride = biasDesc.src.size;
     }
 
     commandList->convertCoopVecMatrices(convertDescs.data(), convertDescs.size());
