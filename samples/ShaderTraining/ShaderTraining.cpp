@@ -207,16 +207,17 @@ public:
     {
         const auto& params = m_neuralNetwork->GetNetworkParams();
 
-        for (int i = 0; i < NUM_TRANSITIONS; ++i)
-        {
-            m_weightOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].weightOffset;
-            m_biasOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].biasOffset;
-        }
-
         // Get a device optimized layout
         m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
 
-        m_totalParameterCount = uint(params.size() / sizeof(uint16_t));
+        for (int i = 0; i < NUM_TRANSITIONS; ++i)
+        {
+            m_weightOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].weightOffset;
+            m_biasOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].biasOffset;
+        }
+
+        m_totalParameterCountHostLayout = uint(params.size() / sizeof(uint16_t));
+		m_totalParameterCountDeviceLayout = uint(m_deviceNetworkLayout.networkSize / sizeof(uint16_t));
         m_batchSize = BATCH_SIZE;
 
         // Create and fill buffers
@@ -242,25 +243,30 @@ public:
             paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
             m_mlpDeviceBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
+            paramsBufferDesc.debugName = "MLPParamsBuffer32";
+            paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+            paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
+            paramsBufferDesc.byteSize = m_totalParameterCountHostLayout * sizeof(float);
+            m_mlpHostBuffer32 = GetDevice()->createBuffer(paramsBufferDesc);
+            paramsBufferDesc.byteSize = m_totalParameterCountDeviceLayout * sizeof(float);
+            m_mlpDeviceBuffer32 = GetDevice()->createBuffer(paramsBufferDesc);
+
+            m_commandList->beginTrackingBufferState(m_mlpDeviceBuffer32, nvrhi::ResourceStates::UnorderedAccess);
+            m_commandList->clearBufferUInt(m_mlpDeviceBuffer32, 0);
+
+            m_commandList->beginTrackingBufferState(m_mlpHostBuffer32, nvrhi::ResourceStates::CopyDest);
+            {
+                std::vector<float> fbuf(m_totalParameterCountHostLayout);
+                std::transform((uint16_t*)params.data(), ((uint16_t*)params.data()) + fbuf.size(), fbuf.begin(), [](auto v) { return rtxns::float16ToFloat32(v); });
+                m_commandList->writeBuffer(m_mlpHostBuffer32, fbuf.data(), fbuf.size() * sizeof(float));
+            }
+
             // Upload the parameters
             UpdateDeviceNetworkParameters(m_commandList);
 
-            paramsBufferDesc.debugName = "MLPParamsBuffer32";
-            paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
-            paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
-            paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
-            m_mlpParamsBuffer32 = GetDevice()->createBuffer(paramsBufferDesc);
-
-            m_commandList->beginTrackingBufferState(m_mlpParamsBuffer32, nvrhi::ResourceStates::CopyDest);
-            {
-                std::vector<float> fbuf(m_totalParameterCount);
-                std::transform((uint16_t*)params.data(), ((uint16_t*)params.data()) + m_totalParameterCount, fbuf.begin(), [](auto v) { return rtxns::float16ToFloat32(v); });
-                m_commandList->writeBuffer(m_mlpParamsBuffer32, fbuf.data(), paramsBufferDesc.byteSize);
-            }
-
             paramsBufferDesc.debugName = "MLPGradientsBuffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            paramsBufferDesc.byteSize = (m_totalParameterCount * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
+            paramsBufferDesc.byteSize = (m_totalParameterCountDeviceLayout * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
             paramsBufferDesc.structStride = sizeof(uint16_t);
             paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
             m_mlpGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
@@ -270,7 +276,7 @@ public:
 
             paramsBufferDesc.debugName = "MLPMoments1Buffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
+            paramsBufferDesc.byteSize = m_totalParameterCountDeviceLayout * sizeof(float);
             paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
             paramsBufferDesc.canHaveRawViews = false;
             m_mlpMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
@@ -315,7 +321,7 @@ public:
             bindingSetDesc = {};
             bindingSetDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_UAV(0, m_mlpDeviceBuffer),
-                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpParamsBuffer32),     nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
+                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpDeviceBuffer32),     nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
                 nvrhi::BindingSetItem::TypedBuffer_UAV(3, m_mlpMoments1Buffer),     nvrhi::BindingSetItem::TypedBuffer_UAV(4, m_mlpMoments2Buffer),
             };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_optimizerPass.bindingLayout, m_optimizerPass.bindingSet);
@@ -364,6 +370,29 @@ public:
 
         // Convert to GPU optimized layout
         m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
+        
+        // Optimizer assumes same indexing for the 32bit buffer (in optimized layout)
+        rtxns::NetworkLayout hostNetworkLayout32 = m_neuralNetwork->GetNetworkLayout();
+        rtxns::NetworkLayout deviceNetworkLayout32 = m_deviceNetworkLayout;
+		hostNetworkLayout32.matrixPrecision = rtxns::Precision::F32;
+		deviceNetworkLayout32.matrixPrecision = rtxns::Precision::F32;
+		hostNetworkLayout32.networkSize *= 2;
+        deviceNetworkLayout32.networkSize *= 2;
+        for (rtxns::NetworkLayer& layer : hostNetworkLayout32.networkLayers)
+        {
+            layer.weightSize *= 2;
+            layer.biasSize *= 2;
+            layer.weightOffset *= 2;
+            layer.biasOffset *= 2;
+		}
+        for (rtxns::NetworkLayer& layer : deviceNetworkLayout32.networkLayers)
+        {
+            layer.weightSize *= 2;
+            layer.biasSize *= 2;
+            layer.weightOffset *= 2;
+            layer.biasOffset *= 2;
+        }
+        m_networkUtils->ConvertWeights(hostNetworkLayout32, deviceNetworkLayout32, m_mlpHostBuffer32, 0, m_mlpDeviceBuffer32, 0, GetDevice(), m_commandList);
 
         // Update barriers for use
         commandList->setBufferState(m_mlpDeviceBuffer, nvrhi::ResourceStates::ShaderResource);
@@ -511,7 +540,7 @@ public:
             for (int i = 0; i < BATCH_COUNT; ++i)
             {
                 TrainingConstantBufferEntry trainingModelConstant = {
-                    .maxParamSize = m_totalParameterCount, .learningRate = m_learningRate, .currentStep = float(++m_currentOptimizationStep), .batchSize = m_batchSize, .seed = seed
+                    .maxParamSize = m_totalParameterCountDeviceLayout, .learningRate = m_learningRate, .currentStep = float(++m_currentOptimizationStep), .batchSize = m_batchSize, .seed = seed
                 };
                 std::ranges::copy(m_weightOffsets, trainingModelConstant.weightOffsets);
                 std::ranges::copy(m_biasOffsets, trainingModelConstant.biasOffsets);
@@ -552,7 +581,7 @@ public:
                 }
 
                 m_commandList->setComputeState(state);
-                m_commandList->dispatch(div_ceil(m_totalParameterCount, 32), 1, 1);
+                m_commandList->dispatch(div_ceil(m_totalParameterCountDeviceLayout, 32), 1, 1);
 
                 if (updateStat && i == 0)
                 {
@@ -673,12 +702,15 @@ private:
     nvrhi::BufferHandle m_trainingConstantBuffer;
     nvrhi::BufferHandle m_mlpHostBuffer;
     nvrhi::BufferHandle m_mlpDeviceBuffer;
-    nvrhi::BufferHandle m_mlpParamsBuffer32;
+    nvrhi::BufferHandle m_mlpHostBuffer32; // Only used for initialization
+    nvrhi::BufferHandle m_mlpDeviceBuffer32;
     nvrhi::BufferHandle m_mlpGradientsBuffer;
     nvrhi::BufferHandle m_mlpMoments1Buffer;
     nvrhi::BufferHandle m_mlpMoments2Buffer;
 
-    uint m_totalParameterCount = 0;
+    // Both parameter counts include possible padding
+    uint m_totalParameterCountHostLayout = 0;
+    uint m_totalParameterCountDeviceLayout = 0;
     uint m_batchSize = BATCH_SIZE;
     uint m_currentOptimizationStep = 0;
     float m_learningRate = LEARNING_RATE;
