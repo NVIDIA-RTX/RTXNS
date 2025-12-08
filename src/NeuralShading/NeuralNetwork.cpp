@@ -76,7 +76,6 @@ static nvrhi::coopvec::MatrixLayout GetNvrhiMatrixLayout(MatrixLayout layout)
 }
 
 constexpr size_t s_matrixAlignment = 64; ///< Minimum byte alignment according to spec.
-constexpr size_t s_vectorAlignment = 16; ///< Minimum byte alignment according to spec.
 
 NetworkUtilities::NetworkUtilities(nvrhi::DeviceHandle device) : m_device(device)
 {
@@ -157,7 +156,7 @@ void NetworkUtilities::SetNetworkLayerSizes(NetworkLayout& layout)
         layer.weightOffset = (uint32_t)offset;
         offset += layer.weightSize;
 
-        offset = align_to(s_vectorAlignment, offset);
+        offset = align_to(s_matrixAlignment, offset);
         layer.biasOffset = (uint32_t)offset;
         offset += layer.biasSize;
     }

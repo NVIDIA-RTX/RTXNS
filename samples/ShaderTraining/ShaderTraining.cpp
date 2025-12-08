@@ -806,7 +806,14 @@ int main(int __argc, const char** __argv)
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, g_windowTitle))
     {
-        log::fatal("Cannot initialize a graphics device with the requested parameters. Please try a NVIDIA driver version greater than 570");
+        if (graphicsApi == nvrhi::GraphicsAPI::VULKAN)
+        {
+            log::fatal("Cannot initialize a graphics device with the requested parameters. Please try a NVIDIA driver version greater than 570");
+        }
+        if (graphicsApi == nvrhi::GraphicsAPI::D3D12)
+        {
+            log::fatal("Cannot initialize a graphics device with the requested parameters. Please use the Shader Model 6-9-Preview Driver, link in the README");
+        }
         return 1;
     }
 

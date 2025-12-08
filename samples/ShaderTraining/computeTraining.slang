@@ -76,7 +76,8 @@ void main_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float4 predictedDisney = { outputParams[0], outputParams[1], outputParams[2], outputParams[3] };
 
-    float4 lossGradient = rtxns::mlp::L2Relative<float, 4>.deriv(actualDisney, predictedDisney, float4(LOSS_SCALE / (gConst.batchSize * 4)) * COMPONENT_WEIGHTS);
-   
+    float4 lossGradient = rtxns::mlp::LossDerivFromVector<4, rtxns::mlp::L2Relative<float,4>>(
+        actualDisney, predictedDisney, float4(LOSS_SCALE / (gConst.batchSize * 4)) * COMPONENT_WEIGHTS);
+
     model.backward(inputParams, hiddenActivation, finalActivation, rtxns::HCoopVec<OUTPUT_NEURONS>(lossGradient[0], lossGradient[1], lossGradient[2], lossGradient[3]));
 }

@@ -37,6 +37,27 @@ CoopVec<T, K> sigmoid<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K>
     return c1 / (c1 + exp(CoopVec<T, K>(T(-1.)) * v));
 }
 
+// copysign function implementation
+CoopVec<T, K> copysign<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> a, CoopVec<T, K> b)
+{
+    [ForceUnroll]
+    for (int i = 0; i < K; ++i)
+    {
+        a[i] = copysign(a[i], b[i]);
+    }
+    return a;
+}
+
+// abs functions implementation
+CoopVec<T, K> abs<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> v)
+{
+     [ForceUnroll]
+    for (int i = 0; i < K; ++i)
+    {
+        v[i] = abs(v[i]);
+    }
+    return v;
+}
 
 
 }
