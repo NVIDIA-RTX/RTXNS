@@ -120,7 +120,7 @@ public:
 
         // Create a buffer for a device optimized parameters layout
         paramsBufferDesc.structStride = sizeof(uint16_t); // Use 16-bit float for weights and biases
-        paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+        paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkByteSize;
         paramsBufferDesc.canHaveRawViews = true;
         paramsBufferDesc.canHaveUAVs = true;
         paramsBufferDesc.canHaveTypedViews = true;

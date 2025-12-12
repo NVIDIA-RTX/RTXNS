@@ -24,6 +24,10 @@
 #define NUM_TRANSITIONS_ALIGN4 ((NUM_TRANSITIONS + 3) / 4)
 #define LOSS_SCALE 128.0
 
+static const uint THREADS_PER_GROUP_TRAIN = 64;
+static const uint THREADS_PER_GROUP_OPTIMIZE = 32;
+static const uint THREADS_PER_GROUP_CONVERT = 64;
+
 struct DirectConstantBufferEntry
 {
     // Scene setup
@@ -45,8 +49,10 @@ struct DirectConstantBufferEntry
     float pad = 0;
 };
 
-struct InferenceConstantBufferEntry : DirectConstantBufferEntry
+struct InferenceConstantBufferEntry
 {
+    DirectConstantBufferEntry directConstants;
+
     // Neural weight & bias offsets
     uint4 weightOffsets[NUM_TRANSITIONS_ALIGN4];
     uint4 biasOffsets[NUM_TRANSITIONS_ALIGN4];
@@ -56,9 +62,12 @@ struct TrainingConstantBufferEntry
 {
     uint4 weightOffsets[NUM_TRANSITIONS_ALIGN4];
     uint4 biasOffsets[NUM_TRANSITIONS_ALIGN4];
+
     uint32_t maxParamSize;
     float learningRate;
     float currentStep;
     uint32_t batchSize;
+
     uint64_t seed;
+    uint2 _pad = uint2(0, 0);
 };

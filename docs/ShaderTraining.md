@@ -144,6 +144,19 @@ Finally, the loss gradient along with the input vector are passed through the mo
 model.backward(inputParams, hiddenActivation, finalActivation, rtxns::HCoopVec<OUTPUT_NEURONS>(lossGradient[0], lossGradient[1], lossGradient[2], lossGradient[3]));
 ```
 
+#### L2 Relative Loss Computation
+The following snippet computes a per-sample L2 Relative Loss in the training shader. This metric is stored into `gLossBuffer` and later reduced across the batch so it can be visualized during training.
+
+```
+    // Store L2 relative loss 
+    float4 diff = predictedDisney - actualDisney;
+    float l2Error  = sqrt(dot(diff, diff));
+    float l2Target = sqrt(dot(actualDisney, actualDisney));
+    float epsilon = 1e-6f;
+
+    gLossBuffer[idx] = l2Error / (l2Target + epsilon);
+```
+
 ### Optimizer
 
 The optimizer shader is no different to the one used in the [Simple Training](SimpleTraining.md) example.

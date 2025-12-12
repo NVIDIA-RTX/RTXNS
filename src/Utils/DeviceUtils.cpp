@@ -49,6 +49,7 @@ void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& devi
 
         deviceParams.requiredVulkanDeviceExtensions.push_back(VK_EXT_SHADER_REPLICATED_COMPOSITES_EXTENSION_NAME);
         deviceParams.requiredVulkanDeviceExtensions.push_back(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME);
+        deviceParams.requiredVulkanDeviceExtensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
 
         // vkCmdCopyImage: Dest image pRegion[0] x-dimension offset [0] + extent [4] exceeds subResource width [2]
         // vkCmdCopyImage: Dest image pRegion[0] y-dimension offset [0] + extent [4] exceeds subResource height [2]
@@ -91,7 +92,12 @@ void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& devi
         static VkPhysicalDeviceVulkan12Features vulkan12Features{};
         vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vulkan12Features.pNext = &vulkan11Features;
-        deviceParams.physicalDeviceFeatures2Extensions = &vulkan12Features;
+
+        static VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatFeatures{};
+        atomicFloatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        atomicFloatFeatures.pNext = &vulkan12Features;
+
+        deviceParams.physicalDeviceFeatures2Extensions = &atomicFloatFeatures;
 
         // Set the callback to modify some bits in VkDeviceCreateInfo before creating the device
         deviceParams.deviceCreateInfoCallback = [](VkDeviceCreateInfo& info) {
@@ -134,6 +140,13 @@ void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& devi
             {
                 pLast->pNext = reinterpret_cast<VkBaseOutStructure*>(&cooperativeVectorFeatures);
                 cooperativeVectorFeatures.pNext = nullptr;
+                pLast = pLast->pNext;
+            }
+
+            if (pLast && atomicFloatFeatures.shaderBufferFloat32AtomicAdd)
+            {
+                pLast->pNext = reinterpret_cast<VkBaseOutStructure*>(&atomicFloatFeatures);
+                atomicFloatFeatures.pNext = nullptr;
             }
         };
     }

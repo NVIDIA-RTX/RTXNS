@@ -29,6 +29,8 @@ public:
 
     bool ValidateNetworkArchitecture(NetworkArchitecture const& netArch);
 
+    bool CompareNetworkArchitecture(const NetworkArchitecture& a, const NetworkArchitecture& b);
+
     // Create host side network layout.
     NetworkLayout CreateHostNetworkLayout(NetworkArchitecture const& netArch);
 
@@ -38,7 +40,7 @@ public:
     // Returns a updated network layout where the weights and bias size / offsets have been update
     // for the new matrix layout
     // Can be device optimal matrix layout
-    NetworkLayout GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout);
+    NetworkLayout GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout, Precision newPrecision = Precision::F16);
 
     // Converts weights and bias buffers from src layout to the dst layout.
     // Both buffers must be device side.
@@ -68,13 +70,14 @@ public:
 
     // Create host side network from provided architecture with initial values.
     bool Initialise(const NetworkArchitecture& netArch);
-
     // Create host side network of provided architecture and initial values from a json file.
     bool InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::string& fileName);
     // Create host side network of provided architecture and initial values from a file.
     bool InitialiseFromFile(const std::string& fileName);
     // Create host side network from an existing network.
     bool InitialiseFromNetwork(HostNetwork const& network);
+    // Reset the weight and bias parameters to starting values
+    void ResetParameters();
     // Write the current network and parameters to file.
     bool WriteToFile(const std::string& fileName);
     // Convert device layout to host layout and update the host side parameters.

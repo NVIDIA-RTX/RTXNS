@@ -37,8 +37,8 @@ struct NetworkFileHeader
     uint32_t version = HEADER_VERSION;
     NetworkArchitecture netArch;
     NetworkLayer layers[MAX_SUPPORTED_LAYERS];
-    MatrixLayout layout;
-    size_t dataSize;
+    MatrixLayout layout = MatrixLayout::RowMajor;
+    size_t dataSize = 0;
 };
 
 } // namespace
@@ -80,6 +80,12 @@ constexpr size_t s_matrixAlignment = 64; ///< Minimum byte alignment according t
 NetworkUtilities::NetworkUtilities(nvrhi::DeviceHandle device) : m_device(device)
 {
 }
+
+bool NetworkUtilities::CompareNetworkArchitecture(const NetworkArchitecture& a, const NetworkArchitecture& b)
+{
+    return a.numHiddenLayers == b.numHiddenLayers && a.inputNeurons == b.inputNeurons && a.hiddenNeurons == b.hiddenNeurons && a.outputNeurons == b.outputNeurons &&
+           a.weightPrecision == b.weightPrecision && a.biasPrecision == b.biasPrecision;
+};
 
 bool rtxns::NetworkUtilities::ValidateNetworkArchitecture(NetworkArchitecture const& netArch)
 {
@@ -161,22 +167,24 @@ void NetworkUtilities::SetNetworkLayerSizes(NetworkLayout& layout)
         offset += layer.biasSize;
     }
     offset = align_to(s_matrixAlignment, offset);
-    layout.networkSize = offset;
+    layout.networkByteSize = offset;
 }
 
 // Returns an updated network layout where the weights and bias size / offsets have been update
 // for the new matrix layout..
 // Can be device optimal matrix layout
-rtxns::NetworkLayout NetworkUtilities::GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout)
+rtxns::NetworkLayout rtxns::NetworkUtilities::GetNewMatrixLayout(NetworkLayout const& srcLayout, MatrixLayout newMatrixLayout, Precision newPrecision /*= Precision::F16*/)
 {
     NetworkLayout newLayout = srcLayout;
 
     // Check the new matrix layout does not match the current one
-    if (newMatrixLayout == srcLayout.matrixLayout)
+    if (newMatrixLayout == srcLayout.matrixLayout && newPrecision == srcLayout.matrixPrecision)
     {
         return newLayout;
     }
     newLayout.matrixLayout = newMatrixLayout;
+    newLayout.matrixPrecision = newPrecision;
+
     SetNetworkLayerSizes(newLayout);
     return newLayout;
 }
@@ -264,26 +272,8 @@ bool rtxns::HostNetwork::Initialise(const NetworkArchitecture& netArch)
     // These are placed after each other in memory with padding to fulfill the alignment requirements.
     m_networkLayout = m_networkUtils->CreateHostNetworkLayout(m_networkArchitecture);
 
-    // Initialize the weight and bias
-    m_networkParams.clear();
-    m_networkParams.resize(m_networkLayout.networkSize, 0);
-
-    static std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-1.0, 1.0);
-
-    for (uint32_t i = 0; i < m_networkLayout.networkLayers.size(); i++)
-    {
-        const auto& layer = m_networkLayout.networkLayers[i];
-        std::vector<uint16_t> weights;
-        weights.resize(size_t(layer.inputs * layer.outputs), 0);
-        std::generate(weights.begin(), weights.end(), [&, k = sqrt(6.f / (layer.inputs + layer.outputs))]() { return rtxns::float32ToFloat16(dist(gen) * k); });
-        std::memcpy(m_networkParams.data() + layer.weightOffset, weights.data(), layer.weightSize);
-
-        std::vector<uint16_t> bias(layer.outputs);
-        std::generate(bias.begin(), bias.end(), [&, k = sqrt(6.f / bias.size())]() { return rtxns::float32ToFloat16(dist(gen) * k); });
-        std::memcpy(m_networkParams.data() + layer.biasOffset, bias.data(), layer.biasSize);
-    }
+    // Initialize the weight and bias parameters
+    ResetParameters();
     return true;
 }
 
@@ -335,7 +325,7 @@ bool HostNetwork::InitialiseFromJson(donut::vfs::IFileSystem& fs, const std::str
 
     // Copy weights and biases into host side format, stored contiguously in one buffer.
     m_networkParams.clear();
-    m_networkParams.resize(m_networkLayout.networkSize, 0);
+    m_networkParams.resize(m_networkLayout.networkByteSize, 0);
 
     for (uint32_t ii = 0; ii < numLayers; ii++)
     {
@@ -384,6 +374,7 @@ bool HostNetwork::InitialiseFromFile(const std::string& fileName)
         m_networkArchitecture = header.netArch;
         m_networkLayout.matrixLayout = header.layout;
         m_networkLayout.matrixPrecision = header.netArch.weightPrecision;
+        m_networkLayout.networkByteSize = header.dataSize;
 
         m_networkLayout.networkLayers.clear();
         for (uint32_t ii = 0; ii < m_networkArchitecture.numHiddenLayers + 1; ii++)
@@ -412,6 +403,29 @@ bool HostNetwork::InitialiseFromNetwork(HostNetwork const& network)
 
     *this = network;
     return true;
+}
+
+void rtxns::HostNetwork::ResetParameters()
+{
+    m_networkParams.clear();
+    m_networkParams.resize(m_networkLayout.networkByteSize, 0);
+
+    static std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(-1.0, 1.0);
+
+    for (uint32_t i = 0; i < m_networkLayout.networkLayers.size(); i++)
+    {
+        const auto& layer = m_networkLayout.networkLayers[i];
+        std::vector<uint16_t> weights;
+        weights.resize(size_t(layer.inputs * layer.outputs), 0);
+        std::generate(weights.begin(), weights.end(), [&, k = sqrt(6.f / (layer.inputs + layer.outputs))]() { return rtxns::float32ToFloat16(dist(gen) * k); });
+        std::memcpy(m_networkParams.data() + layer.weightOffset, weights.data(), layer.weightSize);
+
+        std::vector<uint16_t> bias(layer.outputs);
+        std::generate(bias.begin(), bias.end(), [&, k = sqrt(6.f / bias.size())]() { return rtxns::float32ToFloat16(dist(gen) * k); });
+        std::memcpy(m_networkParams.data() + layer.biasOffset, bias.data(), layer.biasSize);
+    }
 }
 
 // Write the current network and parameters to file.

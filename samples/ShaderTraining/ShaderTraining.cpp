@@ -27,6 +27,13 @@
 #include "NeuralNetwork.h"
 #include "Float16.h"
 
+#include "UIData.h"
+#include "UserInterface.h"
+#include "UIWidget.h"
+#include "ResultsWidget.h"
+#include "TrainingResults.h"
+#include "ResultsReadbackHandler.h"
+
 #include <iostream>
 #include <fstream>
 #include <random>
@@ -44,27 +51,12 @@ constexpr int g_statisticsPerFrames = 100;
 
 static std::random_device rd;
 
-struct UIData
-{
-    float lightIntensity = 1.f;
-    float specular = 0.5f;
-    float roughness = 0.4f;
-    float metallic = 0.7f;
-
-    float trainingTime = 0.0f;
-    uint32_t epochs = 0;
-
-    bool reset = false;
-    bool training = true;
-    bool load = false;
-    std::string fileName;
-};
-
 class SimpleShading : public app::IRenderPass
 {
 
 public:
-    SimpleShading(app::DeviceManager* deviceManager, UIData* uiParams) : IRenderPass(deviceManager), m_userInterfaceParameters(uiParams)
+    SimpleShading(app::DeviceManager* deviceManager, UserInterface& ui, rtxns::GraphicsResources& graphicsResources)
+        : IRenderPass(deviceManager), m_ui(ui), m_graphicsResources(graphicsResources)
     {
     }
 
@@ -74,10 +66,12 @@ public:
 
         std::filesystem::path frameworkShaderPath = app::GetDirectoryWithExecutable() / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
         std::filesystem::path appShaderPath = app::GetDirectoryWithExecutable() / "shaders/ShaderTraining" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+        std::filesystem::path utilShaderPath = app::GetDirectoryWithExecutable() / "shaders/Utils" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
 
         std::shared_ptr<vfs::RootFileSystem> rootFS = std::make_shared<vfs::RootFileSystem>();
         rootFS->mount("/shaders/donut", frameworkShaderPath);
         rootFS->mount("/shaders/app", appShaderPath);
+        rootFS->mount("/shaders/utils", utilShaderPath);
 
         m_shaderFactory = std::make_shared<engine::ShaderFactory>(GetDevice(), rootFS, "/shaders");
         m_commonPasses = std::make_shared<engine::CommonRenderPasses>(GetDevice(), m_shaderFactory);
@@ -98,6 +92,16 @@ public:
 
         ////////////////////
         //
+        // Create UI components
+        //
+        ////////////////////
+        m_resultsWidget = std::make_unique<ResultsWidget>();
+        m_uiWidget = std::make_unique<UIWidget>(m_uiData);
+        m_ui.AddWidget(m_uiWidget.get());
+        m_ui.AddWidget(m_resultsWidget.get());
+
+        ////////////////////
+        //
         // Create the shaders/buffers for the Neural Training
         //
         ////////////////////
@@ -107,7 +111,6 @@ public:
         m_trainingConstantBuffer = GetDevice()->createBuffer(nvrhi::utils::CreateStaticConstantBufferDesc(sizeof(TrainingConstantBufferEntry), "TrainingConstantBuffer")
                                                                  .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
                                                                  .setKeepInitialState(true));
-
         ////////////////////
         //
         // Continue to load the render data and create the required structures
@@ -155,6 +158,24 @@ public:
             m_differencePass.inputLayout = GetDevice()->createInputLayout(attributes, uint32_t(std::size(attributes)), m_differencePass.vertexShader);
         }
 
+        ////////////////////
+        //
+        // Create the shaders/buffers for the data processing
+        //
+        ////////////////////
+        std::vector<donut::engine::ShaderMacro> nvapiMacro;
+        if (m_graphicsResources.NvAPIInitialised())
+        {
+            nvapiMacro.push_back({ donut::engine::ShaderMacro("NVAPI_INIT", "1") });
+        }
+        else
+        {
+            nvapiMacro.push_back({ donut::engine::ShaderMacro("NVAPI_INIT", "0") });
+        }
+        m_lossReductionPass.computeShader = m_shaderFactory->CreateShader("utils/ProcessTrainingResults", "lossReduction_cs", &nvapiMacro, nvrhi::ShaderType::Compute);
+        m_averageLossPass.computeShader = m_shaderFactory->CreateShader("utils/ProcessTrainingResults", "average_cs", nullptr, nvrhi::ShaderType::Compute);
+
+
         // Create and fill render buffers
         {
             m_commandList = GetDevice()->createCommandList();
@@ -195,6 +216,7 @@ public:
 
         CreateMLPBuffers();
 
+        // Create timers
         m_disneyTimer = GetDevice()->createTimerQuery();
         m_neuralTimer = GetDevice()->createTimerQuery();
         m_trainingTimer = GetDevice()->createTimerQuery();
@@ -205,18 +227,20 @@ public:
 
     void CreateMLPBuffers()
     {
-        const auto& params = m_neuralNetwork->GetNetworkParams();
-
-        for (int i = 0; i < NUM_TRANSITIONS; ++i)
-        {
-            m_weightOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].weightOffset;
-            m_biasOffsets[i / 4][i % 4] = m_neuralNetwork->GetNetworkLayout().networkLayers[i].biasOffset;
-        }
-
         // Get a device optimized layout
         m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
 
-        m_totalParameterCount = uint(params.size() / sizeof(uint16_t));
+        for (int i = 0; i < NUM_TRANSITIONS; ++i)
+        {
+            m_weightOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].weightOffset;
+            m_biasOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].biasOffset;
+        }
+
+        const auto hostBufferSize = m_neuralNetwork->GetNetworkLayout().networkByteSize;
+        const auto deviceBufferSize = m_deviceNetworkLayout.networkByteSize;
+
+        assert((deviceBufferSize % sizeof(uint16_t)) == 0 && "fp16 parameter buffer must be 2-byte aligned");
+        m_totalParameterCount = uint(deviceBufferSize / sizeof(uint16_t)); // Includes possible padding
         m_batchSize = BATCH_SIZE;
 
         // Create and fill buffers
@@ -226,40 +250,31 @@ public:
 
             nvrhi::BufferDesc paramsBufferDesc;
 
-            paramsBufferDesc.debugName = "MLPParamsDeviceBuffer";
+            paramsBufferDesc.debugName = "MLPParamsHostBuffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
-            paramsBufferDesc.byteSize = params.size();
-            paramsBufferDesc.keepInitialState = true;
+            paramsBufferDesc.byteSize = hostBufferSize;
             paramsBufferDesc.canHaveUAVs = true;
+            paramsBufferDesc.keepInitialState = true;
             m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
             paramsBufferDesc.debugName = "MLPParamsDeviceBuffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-            paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+            paramsBufferDesc.byteSize = deviceBufferSize;
             paramsBufferDesc.canHaveRawViews = true;
             paramsBufferDesc.canHaveTypedViews = true;
-            paramsBufferDesc.canHaveUAVs = true;
             paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
             m_mlpDeviceBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
-            // Upload the parameters
-            UpdateDeviceNetworkParameters(m_commandList);
-
-            paramsBufferDesc.debugName = "MLPParamsBuffer32";
-            paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+            paramsBufferDesc.debugName = "MLPParamsDeviceBuffer32";
+            paramsBufferDesc.canHaveRawViews = false;
+            paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
             paramsBufferDesc.byteSize = m_totalParameterCount * sizeof(float);
             paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
-            m_mlpParamsBuffer32 = GetDevice()->createBuffer(paramsBufferDesc);
-
-            m_commandList->beginTrackingBufferState(m_mlpParamsBuffer32, nvrhi::ResourceStates::CopyDest);
-            {
-                std::vector<float> fbuf(m_totalParameterCount);
-                std::transform((uint16_t*)params.data(), ((uint16_t*)params.data()) + m_totalParameterCount, fbuf.begin(), [](auto v) { return rtxns::float16ToFloat32(v); });
-                m_commandList->writeBuffer(m_mlpParamsBuffer32, fbuf.data(), paramsBufferDesc.byteSize);
-            }
+            m_mlpDeviceFP32Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 
             paramsBufferDesc.debugName = "MLPGradientsBuffer";
             paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            paramsBufferDesc.canHaveRawViews = true;
             paramsBufferDesc.byteSize = (m_totalParameterCount * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
             paramsBufferDesc.structStride = sizeof(uint16_t);
             paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
@@ -284,8 +299,52 @@ public:
             m_commandList->beginTrackingBufferState(m_mlpMoments2Buffer, nvrhi::ResourceStates::UnorderedAccess);
             m_commandList->clearBufferUInt(m_mlpMoments2Buffer, 0);
 
+            // Upload parameters and convert to GPU optimal layout
+            const auto& params = m_neuralNetwork->GetNetworkParams();
+
+            // Upload the host side parameters
+            m_commandList->writeBuffer(m_mlpHostBuffer, params.data(), params.size());
+
+            // Convert to GPU optimized layout
+            m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
+
             m_commandList->close();
             GetDevice()->executeCommandList(m_commandList);
+        }
+
+        {
+            // Create results resources
+            if (m_resultsReadback == nullptr)
+            {
+                m_resultsReadback = std::make_unique<ResultsReadbackHandler>(GetDevice());
+            }
+            else
+            {
+                m_resultsReadback->Reset();
+            }
+
+            nvrhi::BufferDesc bufferDesc = {};
+            bufferDesc.byteSize = BATCH_SIZE * sizeof(float);
+            bufferDesc.format = nvrhi::Format::R32_FLOAT;
+            bufferDesc.canHaveTypedViews = true;
+            bufferDesc.canHaveUAVs = true;
+            bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            bufferDesc.keepInitialState = true;
+            bufferDesc.debugName = "lossBuffer";
+            m_lossBuffer = GetDevice()->createBuffer(bufferDesc);
+
+            nvrhi::BufferDesc accumDesc;
+            accumDesc.byteSize = sizeof(float);
+            accumDesc.canHaveRawViews = true;
+            accumDesc.canHaveUAVs = true;
+            accumDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+            accumDesc.keepInitialState = true;
+            accumDesc.debugName = "accumulationBuffer";
+            m_accumulationBuffer = GetDevice()->createBuffer(accumDesc);
+
+            m_lossConstantBuffer = GetDevice()->createBuffer(nvrhi::utils::CreateStaticConstantBufferDesc(sizeof(LossConstants), "NeuralConstantBuffer")
+                                                                 .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
+                                                                 .setKeepInitialState(true));
         }
 
         nvrhi::BindingSetDesc bindingSetDesc = {};
@@ -298,6 +357,7 @@ public:
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer),
                 nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer),
                 nvrhi::BindingSetItem::RawBuffer_UAV(0, m_mlpGradientsBuffer),
+                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_lossBuffer),
             };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_trainingPass.bindingLayout, m_trainingPass.bindingSet);
 
@@ -315,7 +375,7 @@ public:
             bindingSetDesc = {};
             bindingSetDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_trainingConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_UAV(0, m_mlpDeviceBuffer),
-                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpParamsBuffer32),     nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
+                nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpDeviceFP32Buffer),   nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
                 nvrhi::BindingSetItem::TypedBuffer_UAV(3, m_mlpMoments1Buffer),     nvrhi::BindingSetItem::TypedBuffer_UAV(4, m_mlpMoments2Buffer),
             };
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_optimizerPass.bindingLayout, m_optimizerPass.bindingSet);
@@ -348,29 +408,47 @@ public:
             nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_differencePass.bindingLayout, m_differencePass.bindingSet);
         }
 
+        // Loss reduction binding
+        {
+            m_lossReductionPass.pipeline = nullptr;
+            m_lossReductionPass.bindingSet = nullptr;
+            m_lossReductionPass.bindingLayout = nullptr;
+
+            bindingSetDesc = {};
+            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_lossConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_SRV(0, m_lossBuffer),
+                                        nvrhi::BindingSetItem::RawBuffer_UAV(0, m_accumulationBuffer),
+                                        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_resultsReadback->GetResultsBuffers()), nvrhi::BindingSetItem::TypedBuffer_UAV(99, nullptr) };
+            nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_lossReductionPass.bindingLayout, m_lossReductionPass.bindingSet);
+
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.bindingLayouts = { m_lossReductionPass.bindingLayout };
+            pipelineDesc.CS = m_lossReductionPass.computeShader;
+            m_lossReductionPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        }
+
+        // Average loss binding
+        {
+            m_averageLossPass.pipeline = nullptr;
+            m_averageLossPass.bindingSet = nullptr;
+            m_averageLossPass.bindingLayout = nullptr;
+
+            bindingSetDesc = {};
+            bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_lossConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_SRV(0, m_lossBuffer),
+                                        nvrhi::BindingSetItem::RawBuffer_UAV(0, m_accumulationBuffer),
+                                        nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_resultsReadback->GetResultsBuffers()) };
+            nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_averageLossPass.bindingLayout, m_averageLossPass.bindingSet);
+
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.bindingLayouts = { m_averageLossPass.bindingLayout };
+            pipelineDesc.CS = m_averageLossPass.computeShader;
+            m_averageLossPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        }
+
         // Reset training parameters
         m_currentOptimizationStep = 0;
-        m_userInterfaceParameters->epochs = 0;
-        m_userInterfaceParameters->trainingTime = 0.0f;
+        m_uiData.epochs = 0;
+        m_uiData.trainingTime = 0.0f;
     }
-
-    // expects an open command list
-    void UpdateDeviceNetworkParameters(nvrhi::CommandListHandle commandList)
-    {
-        // Upload the host side parameters
-        commandList->setBufferState(m_mlpHostBuffer, nvrhi::ResourceStates::CopyDest);
-        commandList->commitBarriers();
-        commandList->writeBuffer(m_mlpHostBuffer, m_neuralNetwork->GetNetworkParams().data(), m_neuralNetwork->GetNetworkParams().size());
-
-        // Convert to GPU optimized layout
-        m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_mlpHostBuffer, 0, m_mlpDeviceBuffer, 0, GetDevice(), m_commandList);
-
-        // Update barriers for use
-        commandList->setBufferState(m_mlpDeviceBuffer, nvrhi::ResourceStates::ShaderResource);
-        commandList->commitBarriers();
-        // m_convertWeights = true;
-    }
-
 
     std::shared_ptr<engine::ShaderFactory> GetShaderFactory() const
     {
@@ -401,9 +479,9 @@ public:
 
     void Animate(float seconds) override
     {
-        if (m_userInterfaceParameters->training)
+        if (m_uiData.training)
         {
-            m_userInterfaceParameters->trainingTime += seconds;
+            m_uiData.trainingTime += seconds;
         }
 
         auto toMicroSeconds = [&](const auto& timer) { return int(GetDevice()->getTimerQueryTime(timer) * 1000000); };
@@ -421,7 +499,7 @@ public:
         // Reset/Load/Save the Neural network if required
         //
         ////////////////////
-        if (m_userInterfaceParameters->reset)
+        if (m_uiData.reset)
         {
             m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
             if (m_neuralNetwork->Initialise(m_netArch))
@@ -432,24 +510,36 @@ public:
             {
                 log::error("Failed to create a network.");
             }
-
-            m_userInterfaceParameters->reset = false;
+            m_resultsWidget->Reset();
+            m_uiData.reset = false;
         }
 
-        if (!m_userInterfaceParameters->fileName.empty())
+        if (!m_uiData.fileName.empty())
         {
-            if (m_userInterfaceParameters->load)
+            if (m_uiData.load)
             {
-                m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
-                m_neuralNetwork->InitialiseFromFile(m_userInterfaceParameters->fileName);
-                CreateMLPBuffers();
+                auto newNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
+                if (newNetwork->InitialiseFromFile(m_uiData.fileName))
+                {
+                    // Validate the loaded file against what the shaders expect
+                    if (!m_networkUtils->CompareNetworkArchitecture(newNetwork->GetNetworkArchitecture(), m_netArch))
+                    {
+                        log::error("The loaded network does not match the network architecture in the compiled shaders. Load aborted");
+                    }
+                    else
+                    {
+                        m_neuralNetwork = std::move(newNetwork);
+                        CreateMLPBuffers();
+                        m_resultsWidget->Reset();
+                    }
+                }
             }
             else
             {
-                m_neuralNetwork->UpdateFromBufferToFile(m_mlpHostBuffer, m_mlpDeviceBuffer, m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout,
-                                                        m_userInterfaceParameters->fileName, GetDevice(), m_commandList);
+                m_neuralNetwork->UpdateFromBufferToFile(
+                    m_mlpHostBuffer, m_mlpDeviceBuffer, m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_uiData.fileName, GetDevice(), m_commandList);
             }
-            m_userInterfaceParameters->fileName = "";
+            m_uiData.fileName = "";
         }
     }
 
@@ -481,11 +571,11 @@ public:
                                                        {},
                                                        { 0, 0, 2, 0 },
                                                        float4(m_lightDir, 1.f),
-                                                       float4(m_userInterfaceParameters->lightIntensity),
+                                                       float4(m_uiData.lightIntensity),
                                                        float4(.82f, .67f, .16f, 1.f),
-                                                       m_userInterfaceParameters->specular,
-                                                       m_userInterfaceParameters->roughness,
-                                                       m_userInterfaceParameters->metallic };
+                                                       m_uiData.specular,
+                                                       m_uiData.roughness,
+                                                       m_uiData.metallic };
         directModelConstant.view = affineToHomogeneous(translation(-directModelConstant.cameraPos.xyz()) * lookatZ(-viewDir.xyz(), cameraUp));
         directModelConstant.viewProject = directModelConstant.view * perspProjD3DStyle(radians(67.4f), float(width) / float(height), 0.1f, 10.f);
 
@@ -495,7 +585,7 @@ public:
         //
         ////////////////////
         InferenceConstantBufferEntry inferenceModelConstant;
-        static_cast<DirectConstantBufferEntry&>(inferenceModelConstant) = directModelConstant;
+        inferenceModelConstant.directConstants = directModelConstant;
         std::ranges::copy(m_weightOffsets, inferenceModelConstant.weightOffsets);
         std::ranges::copy(m_biasOffsets, inferenceModelConstant.biasOffsets);
 
@@ -506,8 +596,16 @@ public:
         // Start the training loop
         //
         ////////////////////
-        if (m_userInterfaceParameters->training)
+        if (m_uiData.training)
         {
+            LossConstants lossConstants = {};
+            lossConstants.epochSampleCount = BATCH_SIZE * BATCH_COUNT;
+            lossConstants.batchSize = BATCH_SIZE;
+            lossConstants.epoch = m_uiData.epochs;
+            m_commandList->writeBuffer(m_lossConstantBuffer, &lossConstants, sizeof(LossConstants));
+
+            m_commandList->clearBufferUInt(m_accumulationBuffer, 0);
+
             for (int i = 0; i < BATCH_COUNT; ++i)
             {
                 TrainingConstantBufferEntry trainingModelConstant = {
@@ -532,7 +630,7 @@ public:
                 }
 
                 m_commandList->setComputeState(state);
-                m_commandList->dispatch(m_batchSize / 64, 1, 1);
+                m_commandList->dispatch(m_batchSize / THREADS_PER_GROUP_TRAIN, 1, 1);
 
                 if (updateStat && i == 0)
                 {
@@ -552,16 +650,39 @@ public:
                 }
 
                 m_commandList->setComputeState(state);
-                m_commandList->dispatch(div_ceil(m_totalParameterCount, 32), 1, 1);
+                m_commandList->dispatch(div_ceil(m_totalParameterCount, THREADS_PER_GROUP_OPTIMIZE), 1, 1);
 
                 if (updateStat && i == 0)
                 {
                     m_commandList->endTimerQuery(m_optimizerTimer);
                 }
                 m_commandList->endMarker();
-            }
 
-            ++m_userInterfaceParameters->epochs;
+                // Sum L2 Loss for the batch
+                state.bindings = { m_lossReductionPass.bindingSet };
+                state.pipeline = m_lossReductionPass.pipeline;
+                m_commandList->beginMarker("Loss reduction");
+
+                m_commandList->setComputeState(state);
+                m_commandList->dispatch(dm::div_ceil(lossConstants.batchSize, RESULTS_THREADS_PER_GROUP), 1, 1);
+                m_commandList->endMarker();
+            }
+            ++m_uiData.epochs;
+
+            {
+                // Calculate average loss for the epoch
+                nvrhi::ComputeState state;
+                state.bindings = { m_averageLossPass.bindingSet };
+                state.pipeline = m_averageLossPass.pipeline;
+                m_commandList->beginMarker("Average loss");
+
+                m_commandList->setComputeState(state);
+                m_commandList->dispatch(1, 1, 1);
+                m_commandList->endMarker();
+
+                // Copy the buffers to the CPU
+                m_resultsReadback->SyncResults(m_commandList);
+            }
         }
 
         nvrhi::utils::ClearColorAttachment(m_commandList, framebuffer, 0, nvrhi::Color(0.f));
@@ -632,9 +753,17 @@ public:
                 m_commandList->endTimerQuery(timer);
             }
         }
-
         m_commandList->close();
         GetDevice()->executeCommandList(m_commandList);
+
+        if (m_uiData.training)
+        {
+            TrainingResults results;
+            if (m_resultsReadback->GetResults(results))
+            {
+                m_resultsWidget->Update(results);
+            }
+        }
     }
 
 private:
@@ -673,10 +802,17 @@ private:
     nvrhi::BufferHandle m_trainingConstantBuffer;
     nvrhi::BufferHandle m_mlpHostBuffer;
     nvrhi::BufferHandle m_mlpDeviceBuffer;
-    nvrhi::BufferHandle m_mlpParamsBuffer32;
+    nvrhi::BufferHandle m_mlpDeviceFP32Buffer;
     nvrhi::BufferHandle m_mlpGradientsBuffer;
     nvrhi::BufferHandle m_mlpMoments1Buffer;
     nvrhi::BufferHandle m_mlpMoments2Buffer;
+
+    // Feedback buffers
+    nvrhi::BufferHandle m_lossBuffer;
+    nvrhi::BufferHandle m_accumulationBuffer;
+    nvrhi::BufferHandle m_lossConstantBuffer;
+
+    std::unique_ptr<ResultsReadbackHandler> m_resultsReadback;
 
     uint m_totalParameterCount = 0;
     uint m_batchSize = BATCH_SIZE;
@@ -697,17 +833,23 @@ private:
 
     NeuralPass m_trainingPass;
     NeuralPass m_optimizerPass;
+    NeuralPass m_lossReductionPass;
+    NeuralPass m_averageLossPass;
 
     uint4 m_weightOffsets[NUM_TRANSITIONS_ALIGN4];
     uint4 m_biasOffsets[NUM_TRANSITIONS_ALIGN4];
 
-    UIData* m_userInterfaceParameters;
+    rtxns::GraphicsResources& m_graphicsResources;
+    UserInterface& m_ui;
+    UIData m_uiData;
+    std::unique_ptr<UIWidget> m_uiWidget;
+    std::unique_ptr<ResultsWidget> m_resultsWidget;
 
     std::shared_ptr<rtxns::NetworkUtilities> m_networkUtils;
     std::unique_ptr<rtxns::HostNetwork> m_neuralNetwork;
     rtxns::NetworkLayout m_deviceNetworkLayout;
 
-    rtxns::NetworkArchitecture m_netArch = {
+    const rtxns::NetworkArchitecture m_netArch = {
         .numHiddenLayers = NUM_HIDDEN_LAYERS,
         .inputNeurons = INPUT_NEURONS,
         .hiddenNeurons = HIDDEN_NEURONS,
@@ -715,64 +857,6 @@ private:
         .weightPrecision = rtxns::Precision::F16,
         .biasPrecision = rtxns::Precision::F16,
     };
-};
-
-class UserInterface : public app::ImGui_Renderer
-{
-public:
-    UserInterface(app::DeviceManager* deviceManager, UIData* ui) : ImGui_Renderer(deviceManager), m_userInterfaceParameters(ui)
-    {
-        ImGui::GetIO().IniFilename = nullptr;
-    }
-
-    void buildUI() override
-    {
-        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), 0);
-        ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-
-        ImGui::SliderFloat("Light Intensity", &m_userInterfaceParameters->lightIntensity, 0.f, 20.f);
-        ImGui::SliderFloat("Specular", &m_userInterfaceParameters->specular, 0.f, 1.f);
-        ImGui::SliderFloat("Roughness", &m_userInterfaceParameters->roughness, 0.3f, 1.f);
-        ImGui::SliderFloat("Metallic", &m_userInterfaceParameters->metallic, 0.f, 1.f);
-
-        ImGui::Text("Epochs : %d", m_userInterfaceParameters->epochs);
-        ImGui::Text("Training Time : %.2f s", m_userInterfaceParameters->trainingTime);
-
-        if (ImGui::Button(m_userInterfaceParameters->training ? "Disable Training" : "Enable Training"))
-        {
-            m_userInterfaceParameters->training = !m_userInterfaceParameters->training;
-        }
-
-        if (ImGui::Button("Reset Training"))
-        {
-            m_userInterfaceParameters->reset = true;
-        }
-
-        if (ImGui::Button("Load Model"))
-        {
-            std::string fileName;
-            if (app::FileDialog(true, "BIN files\0*.bin\0All files\0*.*\0\0", fileName))
-            {
-                m_userInterfaceParameters->fileName = fileName;
-                m_userInterfaceParameters->load = true;
-            }
-        }
-
-        if (ImGui::Button("Save Model"))
-        {
-            std::string fileName;
-            if (app::FileDialog(false, "BIN files\0*.bin\0All files\0*.*\0\0", fileName))
-            {
-                m_userInterfaceParameters->fileName = fileName;
-                m_userInterfaceParameters->load = false;
-            }
-        }
-
-        ImGui::End();
-    }
-
-private:
-    UIData* m_userInterfaceParameters;
 };
 
 #ifdef WIN32
@@ -817,18 +901,17 @@ int main(int __argc, const char** __argv)
         return 1;
     }
 
-    auto graphicsResources = std::make_unique<rtxns::GraphicsResources>(deviceManager->GetDevice());
-    if (!graphicsResources->GetCoopVectorFeatures().inferenceSupported && !graphicsResources->GetCoopVectorFeatures().trainingSupported &&
-        !graphicsResources->GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources->GetCoopVectorFeatures().fp16TrainingSupported)
+    rtxns::GraphicsResources graphicsResources(deviceManager->GetDevice());
+    if (!graphicsResources.GetCoopVectorFeatures().inferenceSupported && !graphicsResources.GetCoopVectorFeatures().trainingSupported &&
+        !graphicsResources.GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources.GetCoopVectorFeatures().fp16TrainingSupported)
     {
         log::fatal("Not all required Coop Vector features are available");
         return 1;
     }
 
     {
-        UIData uiData;
-        SimpleShading example(deviceManager.get(), &uiData);
-        UserInterface gui(deviceManager.get(), &uiData);
+        UserInterface gui(deviceManager.get());
+        SimpleShading example(deviceManager.get(), gui, graphicsResources);
 
         if (example.Init() && gui.Init(example.GetShaderFactory()))
         {

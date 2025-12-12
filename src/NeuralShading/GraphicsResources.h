@@ -12,6 +12,11 @@
 
 #include <nvrhi/nvrhi.h>
 
+#if DONUT_WITH_DX12
+#define NV_SHADER_EXTN_REGISTER_SPACE 0
+#define NV_SHADER_EXTN_SLOT 99
+#endif
+
 namespace rtxns
 {
 
@@ -33,7 +38,13 @@ public:
         return m_coopVectorFeatures;
     }
 
+    bool NvAPIInitialised()
+    {
+        return m_nvapiInitialised;
+    }
+
 private:
     CoopVectorFeatures m_coopVectorFeatures;
+    bool m_nvapiInitialised = false;
 };
 } // namespace rtxns

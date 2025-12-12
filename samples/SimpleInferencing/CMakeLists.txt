@@ -7,7 +7,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-include(../../external/donut/compileshaders.cmake)
+include(compileshaders)
 
 set(shader_includes
 	${SAMPLES_SHADER_INCLUDE_DIR}
@@ -18,7 +18,7 @@ set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021" )
 
 set(SHADER_COMPILE_OPTIONS_SPIRV " -X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV\" " )
 
-set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
+set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
 
 set(project SimpleInferencing)
 set(folder "Samples/SimpleInferencing")

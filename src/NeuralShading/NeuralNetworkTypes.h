@@ -9,7 +9,12 @@
  */
 
 #pragma once
+
+#ifdef __cplusplus
 #include <cstdint>
+#include <donut/core/math/math.h>
+using namespace donut::math;
+#endif
 
 namespace rtxns
 {
@@ -52,7 +57,7 @@ struct NetworkLayout
 {
     MatrixLayout matrixLayout = MatrixLayout::RowMajor;
     Precision matrixPrecision = Precision::F16;
-    size_t networkSize = 0;
+    size_t networkByteSize = 0;
     std::vector<NetworkLayer> networkLayers;
 };
 
@@ -67,6 +72,6 @@ constexpr size_t GetSize(Precision precision)
     default:
         return 0; // Should not get here
     }
-}
+};
 
 } // namespace rtxns

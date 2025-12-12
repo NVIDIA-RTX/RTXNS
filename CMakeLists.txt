@@ -25,6 +25,10 @@ option(DONUT_WITH_DX12 "DX12 is only supported with DX12_COOP_VECTOR_PREVIEW ON"
 option(DONUT_WITH_VULKAN "" ON)
 option(DONUT_WITH_STATIC_SHADERS "" ON)
 
+set(DONUT_DIR "${CMAKE_SOURCE_DIR}/external/donut"
+    CACHE PATH "Path to donut framework")
+list(APPEND CMAKE_MODULE_PATH "${DONUT_DIR}")
+
 # Register our path for CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/support/cmake")
 
@@ -47,11 +51,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RTXNS_BINARY_DIR}")
 
 set(SHADERMAKE_BIN_OUTPUT_PATH "${RTXNS_BINARY_DIR}/bin" CACHE STRING "Output directory for the ShaderMake executable")
 
-set(SHADERMAKE_DXC_VERSION "v1.8.2505" CACHE STRING "")
-set(SHADERMAKE_DXC_DATE "2025_05_24" CACHE STRING "")
+set(SHADERMAKE_DXC_VERSION "v1.8.2505" CACHE STRING "DXC version override" FORCE)
+set(SHADERMAKE_DXC_DATE "2025_05_24" CACHE STRING "DXC date override" FORCE)
 
 option(SHADERMAKE_FIND_SLANG "" ON)
-set(SHADERMAKE_SLANG_VERSION "2025.10" CACHE STRING "")
+set(SHADERMAKE_SLANG_VERSION "2025.23.1" CACHE STRING "Slang version override" FORCE)
 
 set(DONUT_SHADERS_OUTPUT_DIR "${RTXNS_BINARY_DIR}/bin/shaders/framework")
 
@@ -73,6 +77,9 @@ if (DONUT_WITH_DX12)
 	set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/dx12-agility-sdk" CACHE STRING "" FORCE)
 	include("${CMAKE_CURRENT_SOURCE_DIR}/external/donut/cmake/FetchAgilitySDK.cmake")
 	include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/ConfigureAgilitySDK.cmake")
+	
+	# Get NVAPI
+	include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchNVAPI.cmake")
 endif()
 
 add_subdirectory(external/donut)
@@ -93,4 +100,12 @@ if (WIN32)
 endif()
 
 file(WRITE "${CMAKE_SOURCE_DIR}/bin/slangc.bat" "${SHADERMAKE_SLANG_PATH} %*")
+
+# Get implot. 
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchImplot.cmake")
+    message(FATAL_ERROR "Missing FetchImplot.cmake file")
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchImplot.cmake")
+set_target_properties(implot PROPERTIES FOLDER "Third-Party Libraries")
+
     

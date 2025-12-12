@@ -40,9 +40,9 @@ namespace mlp
     };
 
     // Linear activation function
-    struct LinearAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>
+    struct LinearAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>, IDifferentiable
     {
-        T a;
+        no_diff T a;
 
         __init(T a)
         {
@@ -88,9 +88,9 @@ namespace mlp
     };
 
     // Leaky ReLU activation function
-    struct LeakyReLUAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>
+    struct LeakyReLUAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>, IDifferentiable
     {
-        T a;
+        no_diff T a;
         
         __init(T a) 
         { 

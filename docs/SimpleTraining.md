@@ -357,6 +357,16 @@ rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
 
 The output of the back propagation pass will be updated gradients per weight stored in `gMLPParamsGradients`.
 
+#### L2 Loss Computation
+
+The following snippet computes a per-sample L2 Loss in the training shader. The result is written to `gLossBuffer` so it can be reduced across the batch and visualized during training.
+
+```
+float3 diff = predictedRGB - actualRGB;
+gLossBuffer[dispatchThreadIdxy] = dot(diff, diff);
+```
+
+
 ### Optimizer
 
 As seen in the training loop, the optimizer is executed after a single training batch. The purpose of the optimizer is to perform the gradient descent to find the minima of the training model, which in real terms means it adjusts each neurons weight (and bias) in the model by a small amount of its gradient (`gMLPParamsGradients`) to try and find the best value for that neuron. In this example, we have implemented the [Adam](https://arxiv.org/pdf/1412.6980) optimizer.

@@ -16,14 +16,14 @@ import CooperativeVectorFunctions;
 import Utils;
 import LinearOps;
 
-
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
 ByteAddressBuffer gMLPParams                    :REGISTER_SRV(0, 0);
 Texture2D<float4> inputTexture                  :REGISTER_SRV(1, 0);
 RWByteAddressBuffer gMLPParamsGradients         :REGISTER_UAV(0, 0);
-RWStructuredBuffer<uint> gRandState             :REGISTER_UAV(1, 0);
+RWBuffer<uint> gRandState                       :REGISTER_UAV(1, 0);
 RWTexture2D<float4> outputTexture               :REGISTER_UAV(2, 0);
 RWTexture2D<float4> lossTexture                 :REGISTER_UAV(3, 0);
+RWBuffer<float> gLossBuffer                     :REGISTER_UAV(4, 0);
 
 struct RNG
 {
@@ -41,13 +41,12 @@ struct RNG
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)] 
+[numthreads(THREADS_PER_GROUP_X, THREADS_PER_GROUP_Y, 1)] 
 void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint2 batchSize = uint2(gConst.batchSizeX, gConst.batchSizeY);
 
     uint dispatchThreadIdxy = dispatchThreadID.y * batchSize.x + dispatchThreadID.x;
-
     RNG rng = RNG(gRandState[dispatchThreadIdxy]);
 
     // Get a random uv coordinate for the input and frequency encode it for improved convergance
@@ -114,7 +113,7 @@ void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
     // Output the loss, scaled to greyscale for output
     uint2 lossUV = uint2(inputUV.xy * float2(gConst.imageWidth, gConst.imageHeight));
     const float lossScaleFactor = 10.0f; // scale it up for better vis
-    lossTexture[lossUV] = float4((predictedRGB - actualRGB) * lossScaleFactor + 0.5, 1);  
+    lossTexture[lossUV] = abs(float4((predictedRGB - actualRGB), 1));  
 
     // Compute the L2 loss gradient
     // L2Loss = (a-b)^2
@@ -129,7 +128,7 @@ void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> lossGradientCV = CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS>(VECTOR_FORMAT(lossGradient[0]), VECTOR_FORMAT(lossGradient[1]), VECTOR_FORMAT(lossGradient[2]));
 
-    // Back-propogation pass, generate the gradients and accumulate the results into memory to be applied in the optimisation pass.
+    // Back-propagation pass, generate the gradients and accumulate the results into memory to be applied in the optimisation pass.
     CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputGradient;
     CoopVec<VECTOR_FORMAT, HIDDEN_NEURONS> hiddenGradient;
 
@@ -156,4 +155,8 @@ void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // Store the random state to continue iterating next time.
     gRandState[dispatchThreadIdxy] = rng.state;
+
+     // Store L2 loss 
+    float3 diff = predictedRGB - actualRGB;
+    gLossBuffer[dispatchThreadIdxy] = dot(diff, diff);
 }

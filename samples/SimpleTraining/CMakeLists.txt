@@ -7,18 +7,21 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-include(../../external/donut/compileshaders.cmake)
+include(compileshaders)
 
 set(shader_includes
 	${SAMPLES_SHADER_INCLUDE_DIR}
 	${CMAKE_CURRENT_LIST_DIR}
+    ${SAMPLE_UTILITES_DIR}
 )
 
 set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021" )
 
-set(SHADER_COMPILE_OPTIONS_SPIRV " -X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV\" " )
+set(SHADER_COMPILE_OPTIONS_SPIRV "-X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV\" " )
 
-set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
+set(SHADER_COMPILE_OPTIONS_DXIL "--hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
+
+set(SHADER_MODEL "6_9")
 
 set(project SimpleTraining)
 set(folder "Samples/SimpleTraining")
@@ -35,6 +38,7 @@ donut_compile_shaders_all_platforms(
 	SHADERMAKE_OPTIONS ${SHADER_COMPILE_OPTIONS}
     SHADERMAKE_OPTIONS_SPIRV ${SHADER_COMPILE_OPTIONS_SPIRV}
 	SHADERMAKE_OPTIONS_DXIL ${SHADER_COMPILE_OPTIONS_DXIL}
+	SHADER_MODEL ${SHADER_MODEL}
     SOURCES ${${project}_shaders}
     SLANG
 )

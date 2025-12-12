@@ -166,7 +166,7 @@ def training_main():
 
         parametersF = module.ConvertToFloat(parameters)
 
-        # These match up with the argument names of optimizerStep in texture-training.slang
+        # These match up with the argument names of optimizerStep in SlangpyTraining.slang
         optimizer_state = {
             "moments1": spy.NDBuffer.zeros_like(parametersF),
             "moments2": spy.NDBuffer.zeros_like(parametersF),

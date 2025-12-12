@@ -159,7 +159,7 @@ public:
         m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
         // Create a buffer for a device optimized parameters layout
-        paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+        paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkByteSize;
         paramsBufferDesc.canHaveRawViews = true;
         paramsBufferDesc.canHaveUAVs = true;
         paramsBufferDesc.canHaveTypedViews = true;

@@ -20,7 +20,7 @@ RWBuffer<half> gMLPParamsGradients    : REGISTER_UAV(2, 0);
 RWBuffer<float> gMoments1             : REGISTER_UAV(3, 0);
 RWBuffer<float> gMoments2             : REGISTER_UAV(4, 0);
 
-[numthreads(32, 1, 1)]
+[numthreads(THREADS_PER_GROUP_OPTIMIZE, 1, 1)]
 void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
@@ -32,13 +32,14 @@ void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)
 
     if (isfinite(gradient))
     {
-        float weightbias = gMLPParams32[i];
+        // On the first step load from the FP16 buffer
+        float weightBias = gConst.currentStep == 1 ? (float)gMLPParams[i] : gMLPParams32[i];
 
         optimizers::Adam optimizer = optimizers::Adam(gMoments1, gMoments2, gConst.learningRate, LOSS_SCALE);
 
-        float adjustedWeightbias = optimizer.step(weightbias, i, gradient, gConst.currentStep);
+        float adjustedWeightBias = optimizer.step(weightBias, i, gradient, gConst.currentStep);
 
-        gMLPParams32[i] = adjustedWeightbias;
-        gMLPParams[i] = (half) adjustedWeightbias;
+        gMLPParams32[i] = adjustedWeightBias;
+        gMLPParams[i] = (half) adjustedWeightBias;
     }
 }

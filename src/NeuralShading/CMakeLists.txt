@@ -15,7 +15,11 @@ set(folder "${LIBRARY_FILTER}/NeuralShading")
 
 add_library(${project} STATIC EXCLUDE_FROM_ALL ${sources})
 target_include_directories(${project} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(${project} donut_app donut_engine)
+if (DONUT_WITH_DX12)
+	target_link_libraries(${project} donut_app donut_engine nvapi)
+else()
+	target_link_libraries(${project} donut_app donut_engine)
+endif()
 
 set_target_properties(${project} PROPERTIES 
 	FOLDER ${folder}

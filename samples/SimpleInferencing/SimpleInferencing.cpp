@@ -157,7 +157,7 @@ public:
         m_mlpHostBuffer = GetDevice()->createBuffer(bufferDesc);
 
         // Create a buffer for a device optimized parameters layout
-        bufferDesc.byteSize = deviceNetworkLayout.networkSize;
+        bufferDesc.byteSize = deviceNetworkLayout.networkByteSize;
         bufferDesc.canHaveRawViews = true;
         bufferDesc.canHaveUAVs = true;
         bufferDesc.debugName = "MLPParamsByteAddressBuffer";
@@ -344,6 +344,7 @@ private:
     nvrhi::BufferHandle m_mlpDeviceBuffer;
     nvrhi::BufferHandle m_vertexBuffer;
     nvrhi::BufferHandle m_indexBuffer;
+
     nvrhi::InputLayoutHandle m_inputLayout;
     nvrhi::BindingLayoutHandle m_bindingLayout;
     nvrhi::BindingSetHandle m_bindingSet;

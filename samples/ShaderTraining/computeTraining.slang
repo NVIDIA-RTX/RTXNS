@@ -23,9 +23,10 @@ import Disney;
 DECLARE_CBUFFER(TrainingConstantBufferEntry, gConst, 0, 0);
 ByteAddressBuffer gMLPParams               : REGISTER_SRV(0, 0);
 RWByteAddressBuffer gMLPParamsGradients    : REGISTER_UAV(0, 0);
+RWBuffer<float>     gLossBuffer            : REGISTER_UAV(1, 0);
 
 [shader("compute")]
-[numthreads(64, 1, 1)] 
+[numthreads(THREADS_PER_GROUP_TRAIN, 1, 1)] 
 void main_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     //----------- Randomly generate input parameters
@@ -80,4 +81,12 @@ void main_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
         actualDisney, predictedDisney, float4(LOSS_SCALE / (gConst.batchSize * 4)) * COMPONENT_WEIGHTS);
 
     model.backward(inputParams, hiddenActivation, finalActivation, rtxns::HCoopVec<OUTPUT_NEURONS>(lossGradient[0], lossGradient[1], lossGradient[2], lossGradient[3]));
+
+    // Store L2 relative loss 
+    float4 diff = predictedDisney - actualDisney;
+    float l2Error  = sqrt(dot(diff, diff));
+    float l2Target = sqrt(dot(actualDisney, actualDisney));
+    float epsilon = 1e-6f;
+
+    gLossBuffer[idx] = l2Error / (l2Target + epsilon);
 }

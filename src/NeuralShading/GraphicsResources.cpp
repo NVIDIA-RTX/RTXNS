@@ -10,13 +10,14 @@
 
 #pragma once
 
-#if DONUT_WITH_DX12
-#include <wrl/client.h>
-#endif
-
 #include "GraphicsResources.h"
 #include <donut/app/DeviceManager.h>
 #include <donut/core/log.h>
+
+#if DONUT_WITH_DX12
+#include <wrl/client.h>
+#include <nvapi.h>
+#endif
 
 namespace rtxns
 {
@@ -52,6 +53,15 @@ GraphicsResources::GraphicsResources(nvrhi::DeviceHandle device)
             filter.DenyList.pIDList = denyIds;
 
             infoQueue->AddStorageFilterEntries(&filter);
+        }
+
+        // Set NVAPI shader extension slot and space
+        if (m_nvapiInitialised = NvAPI_Initialize() == NVAPI_OK)
+        {
+            if (NvAPI_D3D12_SetNvShaderExtnSlotSpace(d3d12Device, NV_SHADER_EXTN_SLOT, NV_SHADER_EXTN_REGISTER_SPACE) != NVAPI_OK)
+            {
+                return;
+            }
         }
     }
 #endif

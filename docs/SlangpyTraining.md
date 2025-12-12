@@ -185,7 +185,7 @@ Compared to the previous sample, this condenses the function quite a bit, and it
 
 ### Neural Model implementations
 
-What do these `IModule` implementations actually look like? For the most part, these are just thin wrappers around RDXNS functions. For example, `NeuralModules.slang` contains a `FrequencyEncoding` that looks like this:
+What do these `IModule` implementations actually look like? For the most part, these are just thin wrappers around RTXNS functions. For example, `NeuralModules.slang` contains a `FrequencyEncoding` that looks like this:
 ```
 struct FrequencyEncoding<
     T : __BuiltinFloatingPointType,
@@ -222,7 +222,7 @@ This gets a bit tedious. However, we don't have to declare this type by hand - P
 
 `NeuralModules.py` defines many of the same types as `NeuralModules.slang`, with `CoopVecModule` as the root type. The name was chosen deliberately to avoid confusion with the SlangPy `Module` or the pytorch `Module`. It defines a few useful abstract functions:
 - `@property type_name`: Returns a string corresponding to the slang type this module represents
-- `get_this()`: Returns a dictionary with the module fields. This way, a `CoopVecModule` instance can be passed directly to Python
+- `get_this()`: Returns a dictionary with the module fields. This way, a `CoopVecModule` instance can be passed directly to Slang. 
 - `parameters()`, `gradients()`: A list of parameter buffers and their gradients that will be used/produced in forward/backward, respectively
 
 With the Python modules, we can start building network architectures like the one above:

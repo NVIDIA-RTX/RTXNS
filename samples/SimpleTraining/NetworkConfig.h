@@ -8,6 +8,8 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
+#pragma once
+
 #define INPUT_FEATURES 2
 #define INPUT_NEURONS (INPUT_FEATURES * 6) // Frequency encoding increases the input by 6 for each input
 #define OUTPUT_NEURONS 3
@@ -18,8 +20,8 @@
 #define BASE_LEARNING_RATE 0.001f
 #define MIN_LEARNING_RATE 0.0001f
 #define WARMUP_LEARNING_STEPS 0
-#define FLAT_LEARNING_STEPS 1000000
-#define DECAY_LEARNING_STEPS 1000000
+#define FLAT_LEARNING_STEPS 200000
+#define DECAY_LEARNING_STEPS 200000
 
 #define NUM_TRANSITIONS (NUM_HIDDEN_LAYERS + 1)
 #define NUM_TRANSITIONS_ALIGN4 ((NUM_TRANSITIONS + 3) / 4)
@@ -36,12 +38,13 @@
 #define BATCH_SIZE_X 32
 #define BATCH_SIZE_Y 32
 
-enum class NetworkTransform
-{
-    Identity,
-    Zoom,
-    Flip
-};
+static const uint THREADS_PER_GROUP_X = 8;
+static const uint THREADS_PER_GROUP_Y = 8;
+static const uint THREADS_PER_GROUP_OPTIMIZE = 32;
+static const uint THREADS_PER_GROUP_CONVERT = 32;
+
+
+#include "NetworkTransforms.h"
 
 struct NeuralConstants
 {
@@ -57,4 +60,7 @@ struct NeuralConstants
     uint32_t batchSizeX;
     uint32_t batchSizeY;
     NetworkTransform networkTransform;
+
+    uint32_t epoch;
+    uint3 _pad;
 };

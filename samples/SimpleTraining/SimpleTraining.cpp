@@ -36,31 +36,26 @@
 #include "DirectoryHelper.h"
 #include "LearningRateScheduler.h"
 
+#include "UserInterface.h"
+#include "UIWidget.h"
+#include "ResultsWidget.h"
+#include "TrainingResults.h"
+#include "ResultsReadbackHandler.h"
+
 using namespace donut;
 using namespace donut::math;
+
 
 #include "NetworkConfig.h"
 #include <donut/shaders/view_cb.h>
 
 static const char* g_windowTitle = "RTX Neural Shading Example: Simple Training (Ground Truth | Training | Loss )";
 
-struct UIData
-{
-    bool reset = false;
-    bool training = true;
-    bool load = false;
-    std::string fileName;
-    float trainingTime = 0.0f;
-    uint32_t epochs = 0;
-    uint32_t adamSteps = 0;
-    float learningRate = 0.0f;
-    NetworkTransform networkTransform = NetworkTransform::Identity;
-};
-
 class SimpleTraining : public app::ApplicationBase
 {
 public:
-    SimpleTraining(app::DeviceManager* deviceManager, UIData* ui) : ApplicationBase(deviceManager), m_uiParams(ui)
+    SimpleTraining(app::DeviceManager* deviceManager, UserInterface& ui, rtxns::GraphicsResources& graphicsResources)
+        : ApplicationBase(deviceManager), m_ui(ui), m_graphicsResources(graphicsResources)
     {
     }
 
@@ -68,20 +63,22 @@ public:
     {
         std::filesystem::path frameworkShaderPath = app::GetDirectoryWithExecutable() / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
         std::filesystem::path appShaderPath = app::GetDirectoryWithExecutable() / "shaders/SimpleTraining" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+        std::filesystem::path utilShaderPath = app::GetDirectoryWithExecutable() / "shaders/Utils" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
 
-        m_RootFS = std::make_shared<vfs::RootFileSystem>();
-        m_RootFS->mount("/shaders/donut", frameworkShaderPath);
-        m_RootFS->mount("/shaders/app", appShaderPath);
+        m_rootFS = std::make_shared<vfs::RootFileSystem>();
+        m_rootFS->mount("/shaders/donut", frameworkShaderPath);
+        m_rootFS->mount("/shaders/app", appShaderPath);
+        m_rootFS->mount("/shaders/utils", utilShaderPath);
 
-        m_ShaderFactory = std::make_shared<engine::ShaderFactory>(GetDevice(), m_RootFS, "/shaders");
-        m_CommonPasses = std::make_shared<engine::CommonRenderPasses>(GetDevice(), m_ShaderFactory);
-        m_BindingCache = std::make_unique<engine::BindingCache>(GetDevice());
+        m_shaderFactory = std::make_shared<engine::ShaderFactory>(GetDevice(), m_rootFS, "/shaders");
+        m_CommonPasses = std::make_shared<engine::CommonRenderPasses>(GetDevice(), m_shaderFactory);
+        m_bindingCache = std::make_unique<engine::BindingCache>(GetDevice());
 
         m_commandList = GetDevice()->createCommandList();
         m_commandList->open();
 
         auto nativeFS = std::make_shared<vfs::NativeFileSystem>();
-        m_TextureCache = std::make_shared<engine::TextureCache>(GetDevice(), nativeFS, m_DescriptorTableManager);
+        m_TextureCache = std::make_shared<engine::TextureCache>(GetDevice(), nativeFS, m_descriptorTableManager);
 
         const std::filesystem::path dataPath = GetLocalPath("assets/data");
         std::filesystem::path textureFileName = dataPath / "nvidia-logo.png";
@@ -91,7 +88,7 @@ public:
             log::error("Failed to load texture.");
             return false;
         }
-        m_InputTexture = texture->texture;
+        m_inputTexture = texture->texture;
 
         ////////////////////
         //
@@ -100,15 +97,6 @@ public:
         ////////////////////
         m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
         m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
-
-        // Store the network architecture that is expected in the shaders
-        m_shaderNetworkArch = {};
-        m_shaderNetworkArch.inputNeurons = INPUT_NEURONS;
-        m_shaderNetworkArch.hiddenNeurons = HIDDEN_NEURONS;
-        m_shaderNetworkArch.outputNeurons = OUTPUT_NEURONS;
-        m_shaderNetworkArch.numHiddenLayers = NUM_HIDDEN_LAYERS;
-        m_shaderNetworkArch.biasPrecision = NETWORK_PRECISION;
-        m_shaderNetworkArch.weightPrecision = NETWORK_PRECISION;
 
         if (!m_neuralNetwork->Initialise(m_shaderNetworkArch))
         {
@@ -119,20 +107,42 @@ public:
         // Get a device optimized layout
         m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
 
+        // Create UI components
+        m_resultsReadback = std::make_unique<ResultsReadbackHandler>(GetDevice());
+
+        m_resultsWidget = std::make_unique<ResultsWidget>();
+        m_uiWidget = std::make_unique<UIWidget>(m_uiData);
+        m_ui.AddWidget(m_uiWidget.get());
+        m_ui.AddWidget(m_resultsWidget.get());
+
         ////////////////////
         //
         // Create the shaders/buffers/textures for the Neural Training
         //
         ////////////////////
-        m_InferencePass.m_ShaderCS = m_ShaderFactory->CreateShader("app/SimpleTraining_Inference", "inference_cs", nullptr, nvrhi::ShaderType::Compute);
-        m_TrainingPass.m_ShaderCS = m_ShaderFactory->CreateShader("app/SimpleTraining_Training", "training_cs", nullptr, nvrhi::ShaderType::Compute);
-        m_OptimizerPass.m_ShaderCS = m_ShaderFactory->CreateShader("app/SimpleTraining_Optimizer", "adam_cs", nullptr, nvrhi::ShaderType::Compute);
-        m_ConvertWeightsPass.m_ShaderCS = m_ShaderFactory->CreateShader("app/SimpleTraining_Optimizer", "convert_weights_cs", nullptr, nvrhi::ShaderType::Compute);
+        m_inferencePass.computeShader = m_shaderFactory->CreateShader("app/SimpleTraining_Inference", "inference_cs", nullptr, nvrhi::ShaderType::Compute);
+        m_trainingPass.computeShader = m_shaderFactory->CreateShader("app/SimpleTraining_Training", "training_cs", nullptr, nvrhi::ShaderType::Compute);
+        m_optimizerPass.computeShader = m_shaderFactory->CreateShader("app/SimpleTraining_Optimizer", "adam_cs", nullptr, nvrhi::ShaderType::Compute);
 
-        const auto& params = m_neuralNetwork->GetNetworkParams();
+        std::vector<donut::engine::ShaderMacro> nvapiMacro;
+        if (m_graphicsResources.NvAPIInitialised())
+        {
+            nvapiMacro.push_back({ donut::engine::ShaderMacro("NVAPI_INIT", "1") });
+        }
+        else
+        {
+            nvapiMacro.push_back({ donut::engine::ShaderMacro("NVAPI_INIT", "0") });
+        }
+        m_lossReductionPass.computeShader = m_shaderFactory->CreateShader("utils/ProcessTrainingResults", "lossReduction_cs", &nvapiMacro, nvrhi::ShaderType::Compute);
+        m_averageLossPass.computeShader = m_shaderFactory->CreateShader("utils/ProcessTrainingResults", "average_cs", nullptr, nvrhi::ShaderType::Compute);
+
+        const auto hostBufferSize = m_neuralNetwork->GetNetworkLayout().networkByteSize;
+        const auto deviceBufferSize = m_deviceNetworkLayout.networkByteSize;
+
+        m_totalParamCount = (uint32_t)(deviceBufferSize / sizeof(uint16_t));
 
         nvrhi::BufferDesc paramsBufferDesc;
-        paramsBufferDesc.byteSize = params.size();
+        paramsBufferDesc.byteSize = hostBufferSize;
         paramsBufferDesc.debugName = "MLPParamsHostBuffer";
         paramsBufferDesc.canHaveUAVs = true;
         paramsBufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
@@ -140,7 +150,7 @@ public:
         m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
         // Create a buffer for a device optimized parameters layout
-        paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+        paramsBufferDesc.byteSize = deviceBufferSize;
         paramsBufferDesc.canHaveRawViews = true;
         paramsBufferDesc.canHaveUAVs = true;
         paramsBufferDesc.canHaveTypedViews = true;
@@ -152,75 +162,80 @@ public:
         // Upload the parameters
         UpdateDeviceNetworkParameters(m_commandList);
 
-        m_TotalParamCount = (uint32_t)(paramsBufferDesc.byteSize / sizeof(uint16_t));
-
         paramsBufferDesc.debugName = "MLPParametersFloat";
         paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float); // convert to float
+        paramsBufferDesc.byteSize = m_totalParamCount * sizeof(float); // convert to float
         paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
         m_mlpDeviceFloatBuffer = GetDevice()->createBuffer(paramsBufferDesc);
-        m_commandList->beginTrackingBufferState(m_mlpDeviceFloatBuffer, nvrhi::ResourceStates::UnorderedAccess);
-        m_commandList->clearBufferUInt(m_mlpDeviceFloatBuffer, 0);
 
         paramsBufferDesc.debugName = "MLPGradientsBuffer";
         paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        paramsBufferDesc.byteSize = (m_TotalParamCount * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
+        paramsBufferDesc.byteSize = (m_totalParamCount * sizeof(uint16_t) + 3) & ~3; // Round up to nearest multiple of 4
         paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
         m_mlpGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
-        m_commandList->beginTrackingBufferState(m_mlpGradientsBuffer, nvrhi::ResourceStates::UnorderedAccess);
-        m_commandList->clearBufferUInt(m_mlpGradientsBuffer, 0);
 
         paramsBufferDesc.debugName = "MLPMoments1Buffer";
         paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-        paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float);
+        paramsBufferDesc.byteSize = m_totalParamCount * sizeof(float);
         paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
         paramsBufferDesc.canHaveRawViews = false;
         m_mlpMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
-        m_commandList->beginTrackingBufferState(m_mlpMoments1Buffer, nvrhi::ResourceStates::UnorderedAccess);
-        m_commandList->clearBufferUInt(m_mlpMoments1Buffer, 0);
 
         paramsBufferDesc.debugName = "MLPMoments2Buffer";
         m_mlpMoments2Buffer = GetDevice()->createBuffer(paramsBufferDesc);
-        m_commandList->beginTrackingBufferState(m_mlpMoments2Buffer, nvrhi::ResourceStates::UnorderedAccess);
-        m_commandList->clearBufferUInt(m_mlpMoments2Buffer, 0);
 
-        uint32_t imageSize = m_InputTexture->getDesc().width * m_InputTexture->getDesc().height;
+        uint32_t imageSize = m_inputTexture->getDesc().width * m_inputTexture->getDesc().height;
         paramsBufferDesc.debugName = "RandStateBuffer";
         paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
         paramsBufferDesc.byteSize = BATCH_SIZE_X * BATCH_SIZE_Y * 4;
-        paramsBufferDesc.structStride = sizeof(uint32_t);
-        m_RandStateBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+        paramsBufferDesc.format = nvrhi::Format::R32_UINT;
+        m_randStateBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
-        std::mt19937 gen(1337);
-        std::uniform_int_distribution<uint32_t> dist;
-        std::vector<uint32_t> buff(BATCH_SIZE_X * BATCH_SIZE_Y);
-        for (uint32_t i = 0; i < buff.size(); i++)
-        {
-            buff[i] = dist(gen);
-        }
-
-        m_commandList->writeBuffer(m_RandStateBuffer, buff.data(), buff.size() * sizeof(uint32_t));
-        m_commandList->beginTrackingBufferState(m_RandStateBuffer, nvrhi::ResourceStates::UnorderedAccess);
+        ResetTrainingData(m_commandList);
 
         m_commandList->close();
         GetDevice()->executeCommandList(m_commandList);
         GetDevice()->waitForIdle();
 
-        auto inputTexDesc = m_InputTexture->getDesc();
+        auto inputTexDesc = m_inputTexture->getDesc();
         inputTexDesc.debugName = "InferenceTexture";
         inputTexDesc.format = nvrhi::Format::RGBA16_FLOAT;
         inputTexDesc.isUAV = true;
         inputTexDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
         inputTexDesc.keepInitialState = true;
-        m_InferenceTexture = GetDevice()->createTexture(inputTexDesc);
+        m_inferenceTexture = GetDevice()->createTexture(inputTexDesc);
 
         inputTexDesc.debugName = "LossTexture";
-        m_LossTexture = GetDevice()->createTexture(inputTexDesc);
+        m_lossTexture = GetDevice()->createTexture(inputTexDesc);
+
+        // Feedback buffers
+        nvrhi::BufferDesc bufferDesc = {};
+        bufferDesc.byteSize = BATCH_SIZE_X * BATCH_SIZE_Y * sizeof(float);
+        bufferDesc.format = nvrhi::Format::R32_FLOAT;
+        bufferDesc.canHaveTypedViews = true;
+        bufferDesc.canHaveUAVs = true;
+        bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        bufferDesc.keepInitialState = true;
+        bufferDesc.debugName = "lossBuffer";
+        m_lossBuffer = GetDevice()->createBuffer(bufferDesc);
+
+        nvrhi::BufferDesc accumDesc;
+        accumDesc.byteSize = sizeof(float);
+        accumDesc.canHaveRawViews = true;
+        accumDesc.canHaveUAVs = true;
+        accumDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
+        accumDesc.keepInitialState = true;
+        accumDesc.debugName = "accumulationBuffer";
+        m_accumulationBuffer = GetDevice()->createBuffer(accumDesc);
 
         // Set up the constant buffers
-        m_NeuralConstantBuffer = GetDevice()->createBuffer(nvrhi::utils::CreateStaticConstantBufferDesc(sizeof(NeuralConstants), "NeuralConstantBuffer")
+        m_neuralConstantBuffer = GetDevice()->createBuffer(nvrhi::utils::CreateStaticConstantBufferDesc(sizeof(NeuralConstants), "NeuralConstantBuffer")
                                                                .setInitialState(nvrhi::ResourceStates::ConstantBuffer)
                                                                .setKeepInitialState(true));
+
+        // Set up the constant buffers
+        m_lossConstantBuffer = GetDevice()->createBuffer(
+            nvrhi::utils::CreateStaticConstantBufferDesc(sizeof(LossConstants), "NeuralConstantBuffer").setInitialState(nvrhi::ResourceStates::ConstantBuffer).setKeepInitialState(true));
 
         ////////////////////
         //
@@ -230,51 +245,62 @@ public:
         // Inference Pass
         nvrhi::BindingSetDesc bindingSetDesc;
         bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_NeuralConstantBuffer),
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_neuralConstantBuffer),
             nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(1, m_InputTexture),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_InferenceTexture),
+            nvrhi::BindingSetItem::Texture_SRV(1, m_inputTexture),
+            nvrhi::BindingSetItem::Texture_UAV(0, m_inferenceTexture),
         };
-        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_InferencePass.m_BindingLayout, m_InferencePass.m_BindingSet);
+        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_inferencePass.bindingLayout, m_inferencePass.bindingSet);
 
         nvrhi::ComputePipelineDesc pipelineDesc;
-        pipelineDesc.bindingLayouts = { m_InferencePass.m_BindingLayout };
-        pipelineDesc.CS = m_InferencePass.m_ShaderCS;
-        m_InferencePass.m_Pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        pipelineDesc.bindingLayouts = { m_inferencePass.bindingLayout };
+        pipelineDesc.CS = m_inferencePass.computeShader;
+        m_inferencePass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
 
         // Training Pass
         bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_NeuralConstantBuffer),
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_neuralConstantBuffer),
             nvrhi::BindingSetItem::RawBuffer_SRV(0, m_mlpDeviceBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(1, m_InputTexture),
+            nvrhi::BindingSetItem::Texture_SRV(1, m_inputTexture),
             nvrhi::BindingSetItem::RawBuffer_UAV(0, m_mlpGradientsBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_RandStateBuffer),
-            nvrhi::BindingSetItem::Texture_UAV(2, m_InferenceTexture),
-            nvrhi::BindingSetItem::Texture_UAV(3, m_LossTexture),
-        };
-        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_TrainingPass.m_BindingLayout, m_TrainingPass.m_BindingSet);
+            nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_randStateBuffer),
+            nvrhi::BindingSetItem::Texture_UAV(2, m_inferenceTexture),
+            nvrhi::BindingSetItem::Texture_UAV(3, m_lossTexture),
+            nvrhi::BindingSetItem::TypedBuffer_UAV(4, m_lossBuffer),
 
-        pipelineDesc.bindingLayouts = { m_TrainingPass.m_BindingLayout };
-        pipelineDesc.CS = m_TrainingPass.m_ShaderCS;
-        m_TrainingPass.m_Pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        };
+        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_trainingPass.bindingLayout, m_trainingPass.bindingSet);
+
+        pipelineDesc.bindingLayouts = { m_trainingPass.bindingLayout };
+        pipelineDesc.CS = m_trainingPass.computeShader;
+        m_trainingPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
 
         // Optimization Pass
         bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_NeuralConstantBuffer),  nvrhi::BindingSetItem::TypedBuffer_UAV(0, m_mlpDeviceBuffer),
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_neuralConstantBuffer),  nvrhi::BindingSetItem::TypedBuffer_UAV(0, m_mlpDeviceBuffer),
             nvrhi::BindingSetItem::TypedBuffer_UAV(1, m_mlpDeviceFloatBuffer), nvrhi::BindingSetItem::TypedBuffer_UAV(2, m_mlpGradientsBuffer),
             nvrhi::BindingSetItem::TypedBuffer_UAV(3, m_mlpMoments1Buffer),    nvrhi::BindingSetItem::TypedBuffer_UAV(4, m_mlpMoments2Buffer),
         };
-        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_OptimizerPass.m_BindingLayout, m_OptimizerPass.m_BindingSet);
+        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_optimizerPass.bindingLayout, m_optimizerPass.bindingSet);
 
-        pipelineDesc.bindingLayouts = { m_OptimizerPass.m_BindingLayout };
-        pipelineDesc.CS = m_OptimizerPass.m_ShaderCS;
-        m_OptimizerPass.m_Pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        pipelineDesc.bindingLayouts = { m_optimizerPass.bindingLayout };
+        pipelineDesc.CS = m_optimizerPass.computeShader;
+        m_optimizerPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
 
-        // Convert weights to float
-        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_ConvertWeightsPass.m_BindingLayout, m_ConvertWeightsPass.m_BindingSet);
-        pipelineDesc.bindingLayouts = { m_ConvertWeightsPass.m_BindingLayout };
-        pipelineDesc.CS = m_ConvertWeightsPass.m_ShaderCS;
-        m_ConvertWeightsPass.m_Pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+        // Data Processing Pass
+        bindingSetDesc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_lossConstantBuffer), nvrhi::BindingSetItem::TypedBuffer_SRV(0, m_lossBuffer),
+                                    nvrhi::BindingSetItem::RawBuffer_UAV(0, m_accumulationBuffer),
+                                    nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_resultsReadback->GetResultsBuffers()), nvrhi::BindingSetItem::TypedBuffer_UAV(99, nullptr) };
+
+        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_lossReductionPass.bindingLayout, m_lossReductionPass.bindingSet);
+        pipelineDesc.bindingLayouts = { m_lossReductionPass.bindingLayout };
+        pipelineDesc.CS = m_lossReductionPass.computeShader;
+        m_lossReductionPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
+
+        nvrhi::utils::CreateBindingSetAndLayout(GetDevice(), nvrhi::ShaderType::All, 0, bindingSetDesc, m_averageLossPass.bindingLayout, m_averageLossPass.bindingSet);
+        pipelineDesc.bindingLayouts = { m_averageLossPass.bindingLayout };
+        pipelineDesc.CS = m_averageLossPass.computeShader;
+        m_averageLossPass.pipeline = GetDevice()->createComputePipeline(pipelineDesc);
 
         m_learningRateScheduler = std::make_unique<LearningRateScheduler>(BASE_LEARNING_RATE, MIN_LEARNING_RATE, WARMUP_LEARNING_STEPS, FLAT_LEARNING_STEPS, DECAY_LEARNING_STEPS);
 
@@ -295,21 +321,13 @@ public:
         // Update barriers for use
         m_commandList->setBufferState(m_mlpDeviceBuffer, nvrhi::ResourceStates::ShaderResource);
         m_commandList->commitBarriers();
-        m_convertWeights = true;
     }
 
     // expects an open command list
     void ResetTrainingData(nvrhi::CommandListHandle commandList)
     {
-        // Validate the loaded file matches the shaders
-        if (!m_neuralNetwork->Initialise(m_shaderNetworkArch))
-        {
-            log::error("Failed to create a network.");
-            return;
-        }
-
-        // Get a device optimized layout
-        m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
+        // Reset network parameters to initial values
+        m_neuralNetwork->ResetParameters();
 
         // Upload the parameters
         UpdateDeviceNetworkParameters(commandList);
@@ -320,19 +338,32 @@ public:
         commandList->clearBufferUInt(m_mlpMoments1Buffer, 0);
         commandList->clearBufferUInt(m_mlpMoments2Buffer, 0);
 
-        m_uiParams->epochs = 0;
-        m_uiParams->trainingTime = 0.0f;
+        // Reset the rng seed
+        std::mt19937 gen(std::random_device{}());
+        std::uniform_int_distribution<uint32_t> dist;
+        std::vector<uint32_t> buff(BATCH_SIZE_X * BATCH_SIZE_Y);
+        for (uint32_t i = 0; i < buff.size(); i++)
+        {
+            buff[i] = dist(gen);
+        }
 
-        m_AdamCurrentStep = 1;
+        m_commandList->writeBuffer(m_randStateBuffer, buff.data(), buff.size() * sizeof(uint32_t));
+
+        m_adamCurrentStep = 1;
+
+        m_uiWidget->Reset();
+        m_resultsWidget->Reset();
+
+        m_resultsReadback->Reset();
     }
 
     bool LoadScene(std::shared_ptr<vfs::IFileSystem> fs, const std::filesystem::path& sceneFileName) override
     {
-        engine::Scene* scene = new engine::Scene(GetDevice(), *m_ShaderFactory, fs, m_TextureCache, m_DescriptorTableManager, nullptr);
+        engine::Scene* scene = new engine::Scene(GetDevice(), *m_shaderFactory, fs, m_TextureCache, m_descriptorTableManager, nullptr);
 
         if (scene->Load(sceneFileName))
         {
-            m_Scene = std::unique_ptr<engine::Scene>(scene);
+            m_scene = std::unique_ptr<engine::Scene>(scene);
             return true;
         }
 
@@ -341,14 +372,14 @@ public:
 
     std::shared_ptr<engine::ShaderFactory> GetShaderFactory() const
     {
-        return m_ShaderFactory;
+        return m_shaderFactory;
     }
 
     void Animate(float fElapsedTimeSeconds) override
     {
-        if (m_uiParams->training)
+        if (m_uiData.training)
         {
-            m_uiParams->trainingTime += fElapsedTimeSeconds;
+            m_uiData.trainingTime += fElapsedTimeSeconds;
         }
 
         GetDeviceManager()->SetInformativeWindowTitle(g_windowTitle, true);
@@ -358,16 +389,21 @@ public:
         // Load/Save the Neural network if required
         //
         ////////////////////
-        if (!m_uiParams->fileName.empty())
+        if (!m_uiData.fileName.empty())
         {
-            if (m_uiParams->load)
+            if (m_uiData.load)
             {
-                // rtxns::Network network(GetDevice());
-                if (m_neuralNetwork->InitialiseFromFile(m_uiParams->fileName))
+                auto newNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
+                if (newNetwork->InitialiseFromFile(m_uiData.fileName))
                 {
                     // Validate the loaded file against what the shaders expect
-                    if (m_networkUtils->ValidateNetworkArchitecture(m_shaderNetworkArch))
+                    if (!m_networkUtils->CompareNetworkArchitecture(newNetwork->GetNetworkArchitecture(), m_shaderNetworkArch))
                     {
+                        log::error("The loaded network does not match the network architecture in the compiled shaders. Load aborted");
+                    }
+                    else
+                    {
+                        m_neuralNetwork = std::move(newNetwork);
                         m_commandList = GetDevice()->createCommandList();
                         m_commandList->open();
 
@@ -383,29 +419,32 @@ public:
                         m_commandList->clearBufferUInt(m_mlpMoments1Buffer, 0);
                         m_commandList->clearBufferUInt(m_mlpMoments2Buffer, 0);
 
-                        m_uiParams->epochs = 0;
-                        m_uiParams->trainingTime = 0.0f;
+                        m_uiData.epochs = 0;
+                        m_uiData.trainingTime = 0.0f;
 
-                        m_AdamCurrentStep = 1;
+                        m_adamCurrentStep = 1;
 
                         m_commandList->close();
                         GetDevice()->executeCommandList(m_commandList);
+
+                        m_resultsWidget->Reset();
+                        m_resultsReadback->Reset();
                     }
                 }
             }
             else
             {
                 m_neuralNetwork->UpdateFromBufferToFile(
-                    m_mlpHostBuffer, m_mlpDeviceBuffer, m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_uiParams->fileName, GetDevice(), m_commandList);
+                    m_mlpHostBuffer, m_mlpDeviceBuffer, m_neuralNetwork->GetNetworkLayout(), m_deviceNetworkLayout, m_uiData.fileName, GetDevice(), m_commandList);
             }
-            m_uiParams->fileName = "";
+            m_uiData.fileName = "";
         }
     }
 
     void BackBufferResizing() override
     {
-        m_Framebuffer = nullptr;
-        m_BindingCache->Clear();
+        m_framebuffer = nullptr;
+        m_bindingCache->Clear();
     }
 
     void Render(nvrhi::IFramebuffer* framebuffer) override
@@ -414,10 +453,10 @@ public:
 
         m_commandList->open();
 
-        if (m_uiParams->reset)
+        if (m_uiData.reset)
         {
             ResetTrainingData(m_commandList);
-            m_uiParams->reset = false;
+            m_uiData.reset = false;
         }
 
         nvrhi::utils::ClearColorAttachment(m_commandList, framebuffer, 0, nvrhi::Color(0.f));
@@ -435,70 +474,88 @@ public:
             neuralConstants.biasOffsets[i / 4][i % 4] = m_deviceNetworkLayout.networkLayers[i].biasOffset;
         }
 
-        neuralConstants.imageWidth = m_InferenceTexture->getDesc().width;
-        neuralConstants.imageHeight = m_InferenceTexture->getDesc().height;
-        neuralConstants.maxParamSize = m_TotalParamCount;
-        neuralConstants.currentStep = m_AdamCurrentStep;
-        neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_AdamCurrentStep);
+        neuralConstants.imageWidth = m_inferenceTexture->getDesc().width;
+        neuralConstants.imageHeight = m_inferenceTexture->getDesc().height;
+        neuralConstants.maxParamSize = m_totalParamCount;
         neuralConstants.batchSizeX = BATCH_SIZE_X;
         neuralConstants.batchSizeY = BATCH_SIZE_Y;
-        neuralConstants.networkTransform = m_uiParams->networkTransform;
-        m_commandList->writeBuffer(m_NeuralConstantBuffer, &neuralConstants, sizeof(neuralConstants));
+        neuralConstants.networkTransform = m_uiData.networkTransform;
+        neuralConstants.epoch = m_uiData.epochs;
 
-        nvrhi::ComputeState state;
+        LossConstants lossConstants = {};
+        lossConstants.batchSize = BATCH_SIZE_X * BATCH_SIZE_Y;
+        lossConstants.epochSampleCount = BATCH_SIZE_X * BATCH_SIZE_Y * BATCH_COUNT;
+        lossConstants.epoch = m_uiData.epochs;
+        m_commandList->writeBuffer(m_lossConstantBuffer, &lossConstants, sizeof(LossConstants));
+
 
         ////////////////////
         //
         // Start the training loop
         //
         ////////////////////
-        if (m_uiParams->training)
+        nvrhi::ComputeState state;
+        if (m_uiData.training)
         {
-            if (m_convertWeights)
-            {
-                state.bindings = { m_ConvertWeightsPass.m_BindingSet };
-                state.pipeline = m_ConvertWeightsPass.m_Pipeline;
-                m_commandList->beginMarker("ConvertWeights");
-                m_commandList->setComputeState(state);
-                m_commandList->dispatch(dm::div_ceil(m_TotalParamCount, 32), 1, 1);
-                m_commandList->endMarker();
-                m_convertWeights = false;
-            }
+            m_commandList->clearBufferUInt(m_accumulationBuffer, 0);
 
             for (uint32_t batch = 0; batch < BATCH_COUNT; batch++)
             {
+                neuralConstants.currentStep = m_adamCurrentStep;
+                neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_adamCurrentStep);
+                m_commandList->writeBuffer(m_neuralConstantBuffer, &neuralConstants, sizeof(NeuralConstants));
+
                 // run the training pass
-                state.bindings = { m_TrainingPass.m_BindingSet };
-                state.pipeline = m_TrainingPass.m_Pipeline;
+                state.bindings = { m_trainingPass.bindingSet };
+                state.pipeline = m_trainingPass.pipeline;
                 m_commandList->beginMarker("Training");
                 m_commandList->setComputeState(state);
-                m_commandList->dispatch(dm::div_ceil(BATCH_SIZE_X, 8), dm::div_ceil(BATCH_SIZE_Y, 8), 1);
+                m_commandList->dispatch(dm::div_ceil(BATCH_SIZE_X, THREADS_PER_GROUP_X), dm::div_ceil(BATCH_SIZE_Y, THREADS_PER_GROUP_Y), 1);
                 m_commandList->endMarker();
 
                 // optimizer pass
-                state.bindings = { m_OptimizerPass.m_BindingSet };
-                state.pipeline = m_OptimizerPass.m_Pipeline;
+                state.bindings = { m_optimizerPass.bindingSet };
+                state.pipeline = m_optimizerPass.pipeline;
                 m_commandList->beginMarker("Update Weights");
                 m_commandList->setComputeState(state);
-                m_commandList->dispatch(dm::div_ceil(m_TotalParamCount, 32), 1, 1);
+                m_commandList->dispatch(dm::div_ceil(m_totalParamCount, THREADS_PER_GROUP_OPTIMIZE), 1, 1);
                 m_commandList->endMarker();
 
-                neuralConstants.currentStep = ++m_AdamCurrentStep;
-                neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_AdamCurrentStep);
-                m_commandList->writeBuffer(m_NeuralConstantBuffer, &neuralConstants, sizeof(neuralConstants));
+                // Sum L2 Loss for the batch
+                state.bindings = { m_lossReductionPass.bindingSet };
+                state.pipeline = m_lossReductionPass.pipeline;
+                m_commandList->beginMarker("DataProcessing");
+                m_commandList->setComputeState(state);
+                m_commandList->dispatch(dm::div_ceil(BATCH_SIZE_X * BATCH_SIZE_Y, RESULTS_THREADS_PER_GROUP), 1, 1);
+                m_commandList->endMarker();
+
+                m_adamCurrentStep++;
             }
-            m_uiParams->epochs++;
-            m_uiParams->adamSteps = m_AdamCurrentStep;
-            m_uiParams->learningRate = neuralConstants.learningRate;
+            m_uiData.epochs++;
+            m_uiData.adamSteps = m_adamCurrentStep;
+            m_uiData.learningRate = neuralConstants.learningRate;
+
+            // Calculate average loss for the epoch
+            state.bindings = { m_averageLossPass.bindingSet };
+            state.pipeline = m_averageLossPass.pipeline;
+            m_commandList->beginMarker("DataFinalising");
+            m_commandList->setComputeState(state);
+            m_commandList->dispatch(1, 1, 1);
+
+            m_commandList->endMarker();
+
+            // Copy the buffers to the CPU
+            m_resultsReadback->SyncResults(m_commandList);
         }
 
         {
             // inference pass
-            state.bindings = { m_InferencePass.m_BindingSet };
-            state.pipeline = m_InferencePass.m_Pipeline;
+            state.bindings = { m_inferencePass.bindingSet };
+            state.pipeline = m_inferencePass.pipeline;
             m_commandList->beginMarker("Inference");
             m_commandList->setComputeState(state);
-            m_commandList->dispatch(dm::div_ceil(m_InferenceTexture->getDesc().width, 8), dm::div_ceil(m_InferenceTexture->getDesc().height, 8), 1);
+            m_commandList->dispatch(
+                dm::div_ceil(m_inferenceTexture->getDesc().width, THREADS_PER_GROUP_X), dm::div_ceil(m_inferenceTexture->getDesc().height, THREADS_PER_GROUP_Y), 1);
             m_commandList->endMarker();
         }
 
@@ -523,8 +580,8 @@ public:
                 engine::BlitParameters blitParams;
                 blitParams.targetFramebuffer = framebuffer;
                 blitParams.targetViewport = viewport;
-                blitParams.sourceTexture = m_InputTexture;
-                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_BindingCache.get());
+                blitParams.sourceTexture = m_inputTexture;
+                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_bindingCache.get());
             }
             else if (viewIndex == 1)
             {
@@ -532,8 +589,8 @@ public:
                 engine::BlitParameters blitParams;
                 blitParams.targetFramebuffer = framebuffer;
                 blitParams.targetViewport = viewport;
-                blitParams.sourceTexture = m_InferenceTexture;
-                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_BindingCache.get());
+                blitParams.sourceTexture = m_inferenceTexture;
+                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_bindingCache.get());
             }
             else if (viewIndex == 2)
             {
@@ -541,39 +598,54 @@ public:
                 engine::BlitParameters blitParams;
                 blitParams.targetFramebuffer = framebuffer;
                 blitParams.targetViewport = viewport;
-                blitParams.sourceTexture = m_LossTexture;
-                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_BindingCache.get());
+                blitParams.sourceTexture = m_lossTexture;
+                m_CommonPasses->BlitTexture(m_commandList, blitParams, m_bindingCache.get());
             }
         }
 
         m_commandList->close();
         GetDevice()->executeCommandList(m_commandList);
+
+        if (m_uiData.training)
+        {
+            UpdateTrainingData();
+        }
+    }
+
+    void UpdateTrainingData()
+    {
+        TrainingResults results;
+        if (m_resultsReadback->GetResults(results))
+        {
+            m_resultsWidget->Update(results);
+        }
     }
 
 private:
-    std::shared_ptr<vfs::RootFileSystem> m_RootFS;
+    std::shared_ptr<vfs::RootFileSystem> m_rootFS;
 
     nvrhi::CommandListHandle m_commandList;
 
     struct NeuralPass
     {
-        nvrhi::ShaderHandle m_ShaderCS;
-        nvrhi::BindingLayoutHandle m_BindingLayout;
-        nvrhi::BindingSetHandle m_BindingSet;
-        nvrhi::ComputePipelineHandle m_Pipeline;
+        nvrhi::ShaderHandle computeShader;
+        nvrhi::BindingLayoutHandle bindingLayout;
+        nvrhi::BindingSetHandle bindingSet;
+        nvrhi::ComputePipelineHandle pipeline;
     };
 
-    NeuralPass m_InferencePass;
-    NeuralPass m_TrainingPass;
-    NeuralPass m_OptimizerPass;
-    NeuralPass m_ConvertWeightsPass;
+    NeuralPass m_inferencePass;
+    NeuralPass m_trainingPass;
+    NeuralPass m_optimizerPass;
+    NeuralPass m_lossReductionPass;
+    NeuralPass m_averageLossPass;
 
-    nvrhi::BufferHandle m_NeuralConstantBuffer;
-    nvrhi::BufferHandle m_OptimisationConstantBuffer;
+    nvrhi::BufferHandle m_neuralConstantBuffer;
+    nvrhi::BufferHandle m_optimisationConstantBuffer;
 
-    nvrhi::TextureHandle m_InputTexture;
-    nvrhi::TextureHandle m_InferenceTexture;
-    nvrhi::TextureHandle m_LossTexture;
+    nvrhi::TextureHandle m_inputTexture;
+    nvrhi::TextureHandle m_inferenceTexture;
+    nvrhi::TextureHandle m_lossTexture;
 
     nvrhi::BufferHandle m_mlpHostBuffer;
     nvrhi::BufferHandle m_mlpDeviceBuffer;
@@ -581,85 +653,45 @@ private:
     nvrhi::BufferHandle m_mlpGradientsBuffer;
     nvrhi::BufferHandle m_mlpMoments1Buffer;
     nvrhi::BufferHandle m_mlpMoments2Buffer;
-    nvrhi::BufferHandle m_RandStateBuffer;
+    nvrhi::BufferHandle m_randStateBuffer;
 
-    nvrhi::FramebufferHandle m_Framebuffer;
+    // Feedback buffers
+    nvrhi::BufferHandle m_lossBuffer;
+    nvrhi::BufferHandle m_accumulationBuffer;
+    nvrhi::BufferHandle m_lossConstantBuffer;
 
-    std::shared_ptr<engine::ShaderFactory> m_ShaderFactory;
-    std::unique_ptr<engine::Scene> m_Scene;
-    std::shared_ptr<engine::DescriptorTableManager> m_DescriptorTableManager;
-    std::unique_ptr<engine::BindingCache> m_BindingCache;
+    std::unique_ptr<ResultsReadbackHandler> m_resultsReadback;
 
-    rtxns::NetworkArchitecture m_shaderNetworkArch;
+    nvrhi::FramebufferHandle m_framebuffer;
+
+    std::shared_ptr<engine::ShaderFactory> m_shaderFactory;
+    std::unique_ptr<engine::Scene> m_scene;
+    std::shared_ptr<engine::DescriptorTableManager> m_descriptorTableManager;
+    std::unique_ptr<engine::BindingCache> m_bindingCache;
+
     std::shared_ptr<rtxns::NetworkUtilities> m_networkUtils;
     std::unique_ptr<rtxns::HostNetwork> m_neuralNetwork;
     rtxns::NetworkLayout m_deviceNetworkLayout;
 
+    const rtxns::NetworkArchitecture m_shaderNetworkArch = {
+        .numHiddenLayers = NUM_HIDDEN_LAYERS,
+        .inputNeurons = INPUT_NEURONS,
+        .hiddenNeurons = HIDDEN_NEURONS,
+        .outputNeurons = OUTPUT_NEURONS,
+        .weightPrecision = NETWORK_PRECISION,
+        .biasPrecision = NETWORK_PRECISION,
+    };
+
     std::unique_ptr<LearningRateScheduler> m_learningRateScheduler;
 
-    uint m_TotalParamCount = 0;
-    uint m_AdamCurrentStep = 1;
-    bool m_convertWeights = true;
+    uint m_totalParamCount = 0;
+    uint m_adamCurrentStep = 1;
 
-    UIData* m_uiParams;
-};
-
-class UserInterface : public app::ImGui_Renderer
-{
-public:
-    UserInterface(app::DeviceManager* deviceManager, UIData* uiParams) : ImGui_Renderer(deviceManager), m_uiParams(uiParams)
-    {
-        ImGui::GetIO().IniFilename = nullptr;
-    }
-
-    void buildUI() override
-    {
-        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), 0);
-
-        ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        bool reset = ImGui::Combo("##networkTransform", (int*)&m_uiParams->networkTransform,
-                                  "1:1 Mapping\0"
-                                  "Zoom\0"
-                                  "X/Y Flip\0");
-        ImGui::Text("Epochs : %d", m_uiParams->epochs);
-        ImGui::Text("Adam Steps : %d", m_uiParams->adamSteps);
-        ImGui::Text("Training Time : %.2f s", m_uiParams->trainingTime);
-        ImGui::Text("Learning Rate : %.9f", m_uiParams->learningRate);
-
-        if (ImGui::Button(m_uiParams->training ? "Disable Training" : "Enable Training"))
-        {
-            m_uiParams->training = !m_uiParams->training;
-        }
-        reset |= (ImGui::Button("Reset Training"));
-        if (ImGui::Button("Load Model"))
-        {
-            std::string fileName;
-            if (app::FileDialog(true, "BIN files\0*.bin\0All files\0*.*\0\0", fileName))
-            {
-                m_uiParams->fileName = fileName;
-                m_uiParams->load = true;
-            }
-        }
-        if (ImGui::Button("Save Model"))
-        {
-            std::string fileName;
-            if (app::FileDialog(false, "BIN files\0*.bin\0All files\0*.*\0\0", fileName))
-            {
-                m_uiParams->fileName = fileName;
-                m_uiParams->load = false;
-            }
-        }
-
-        ImGui::End();
-
-        if (reset)
-        {
-            m_uiParams->reset = true;
-        }
-    }
-
-private:
-    UIData* m_uiParams;
+    rtxns::GraphicsResources& m_graphicsResources;
+    UserInterface& m_ui;
+    UIData m_uiData;
+    std::unique_ptr<UIWidget> m_uiWidget;
+    std::unique_ptr<ResultsWidget> m_resultsWidget;
 };
 
 #ifdef WIN32
@@ -675,12 +707,18 @@ int main(int __argc, const char** __argv)
         return 1;
     }
 
-    app::DeviceManager* deviceManager = app::DeviceManager::Create(graphicsApi);
+    std::unique_ptr<app::DeviceManager> deviceManager(app::DeviceManager::Create(graphicsApi));
+    if (deviceManager == nullptr)
+    {
+        log::fatal("Failed to create the device manager");
+        return 1;
+    }
 
     app::DeviceCreationParameters deviceParams;
 #ifdef _DEBUG
     deviceParams.enableDebugRuntime = true;
     deviceParams.enableNvrhiValidationLayer = true;
+    deviceParams.enableGPUValidation = false;
 #endif
     // w/h based on input texture
     deviceParams.backBufferWidth = 768 * 3;
@@ -706,18 +744,18 @@ int main(int __argc, const char** __argv)
         return 1;
     }
 
-    auto graphicsResources = std::make_unique<rtxns::GraphicsResources>(deviceManager->GetDevice());
-    if (!graphicsResources->GetCoopVectorFeatures().inferenceSupported && !graphicsResources->GetCoopVectorFeatures().trainingSupported &&
-        !graphicsResources->GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources->GetCoopVectorFeatures().fp16TrainingSupported)
+    rtxns::GraphicsResources graphicsResources(deviceManager->GetDevice());
+    if (!graphicsResources.GetCoopVectorFeatures().inferenceSupported && !graphicsResources.GetCoopVectorFeatures().trainingSupported &&
+        !graphicsResources.GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources.GetCoopVectorFeatures().fp16TrainingSupported)
     {
         log::fatal("Not all required Coop Vector features are available");
         return 1;
     }
 
     {
-        UIData uiData;
-        SimpleTraining example(deviceManager, &uiData);
-        UserInterface gui(deviceManager, &uiData);
+        UserInterface gui(deviceManager.get());
+        SimpleTraining example(deviceManager.get(), gui, graphicsResources);
+
         if (example.Init() && gui.Init(example.GetShaderFactory()))
         {
             deviceManager->AddRenderPassToBack(&example);
@@ -729,8 +767,6 @@ int main(int __argc, const char** __argv)
     }
 
     deviceManager->Shutdown();
-
-    delete deviceManager;
 
     return 0;
 }
