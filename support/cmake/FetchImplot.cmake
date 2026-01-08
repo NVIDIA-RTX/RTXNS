@@ -39,7 +39,7 @@ include(FetchContent)
 FetchContent_Declare(
     implot
     GIT_REPOSITORY https://github.com/epezent/implot.git
-    GIT_TAG v0.16
+    GIT_TAG v0.17
     )
 FetchContent_MakeAvailable(implot)
 
