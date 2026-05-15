@@ -50,7 +50,6 @@ namespace rtxns
     [Differentiable]
     CoopVec<T, NUM_SCALES * PARAMS_COUNT * 2> EncodeFrequencyN<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int, let NUM_SCALES : int>(CoopVec<T, PARAMS_COUNT> inputParams)
     {
-        var inputVec = VectorFromCoopVec(inputParams);
         float[NUM_SCALES * PARAMS_COUNT * 2] outputVec;
 
         [ForceUnroll]
@@ -59,7 +58,7 @@ namespace rtxns
             const int base = i * NUM_SCALES * 2;
 
             float sn, cn;
-            sincos(inputVec[i] * 3.141592653589793238f, sn, cn);
+            sincos(inputParams[i].toFloat() * 3.141592653589793238f, sn, cn);
             outputVec[base + 0] = sn;
             outputVec[base + 1] = cn;
             [ForceUnroll]
