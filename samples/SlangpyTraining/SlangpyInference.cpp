@@ -449,9 +449,11 @@ int main(int __argc, const char** __argv)
     }
 
     auto graphicsResources = std::make_unique<rtxns::GraphicsResources>(deviceManager->GetDevice());
-    if (!graphicsResources->GetCoopVectorFeatures().inferenceSupported && !graphicsResources->GetCoopVectorFeatures().fp16InferencingSupported)
+    const rtxns::CoopVectorFeatures features = graphicsResources->GetCoopVectorFeatures();
+    const std::string missingFeatures = rtxns::GetMissingCoopVectorFeatures(features, rtxns::CoopVectorRequirement::Inference);
+    if (!missingFeatures.empty())
     {
-        log::fatal("Not all required Coop Vector features are available");
+        log::fatal("Missing required Coop Vector features:%s", missingFeatures.c_str());
         return 1;
     }
 

@@ -8,11 +8,8 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#pragma once
-
 #include "GraphicsResources.h"
 #include <donut/app/DeviceManager.h>
-#include <donut/core/log.h>
 
 #if DONUT_WITH_DX12
 #include <wrl/client.h>
@@ -22,26 +19,67 @@
 namespace rtxns
 {
 
+std::string GetMissingCoopVectorFeatures(const CoopVectorFeatures& features, CoopVectorRequirement requirement)
+{
+    std::string missing;
+    auto add = [&missing](const char* text) {
+        missing += "\n  - ";
+        missing += text;
+    };
+
+    if (!features.inferenceSupported)
+    {
+        add("Cooperative Vector inferencing (nvrhi::Feature::CooperativeVectorInferencing)");
+    }
+    else if (!features.fp16InferenceSupported)
+    {
+        add("FP16 Cooperative Vector inferencing matrix multiply support");
+    }
+
+    if (requirement == CoopVectorRequirement::Training)
+    {
+        if (!features.trainingSupported)
+        {
+            add("Cooperative Vector training (nvrhi::Feature::CooperativeVectorTraining)");
+        }
+        else if (!features.fp16TrainingSupported)
+        {
+            add("FP16 Cooperative Vector training buffer support");
+        }
+    }
+
+    return missing;
+}
+
 GraphicsResources::GraphicsResources(nvrhi::DeviceHandle device)
 {
     m_coopVectorFeatures.inferenceSupported = device->queryFeatureSupport(nvrhi::Feature::CooperativeVectorInferencing);
     m_coopVectorFeatures.trainingSupported = device->queryFeatureSupport(nvrhi::Feature::CooperativeVectorTraining);
 
-    auto features = device->queryCoopVecFeatures();
-    for (const auto& combo : features.matMulFormats)
+    if (m_coopVectorFeatures.inferenceSupported)
     {
-        if (combo.inputType == nvrhi::coopvec::DataType::Float16 && combo.inputInterpretation == nvrhi::coopvec::DataType::Float16 &&
-            combo.matrixInterpretation == nvrhi::coopvec::DataType::Float16 && combo.outputType == nvrhi::coopvec::DataType::Float16)
-        {
-            m_coopVectorFeatures.fp16InferencingSupported = true;
-            m_coopVectorFeatures.fp16TrainingSupported = features.trainingFloat16;
-            break;
-        }
+        nvrhi::coopvec::MatMulFormatCombo fp16MatMul{};
+        fp16MatMul.inputType = nvrhi::coopvec::DataType::Float16;
+        fp16MatMul.inputInterpretation = nvrhi::coopvec::DataType::Float16;
+        fp16MatMul.matrixInterpretation = nvrhi::coopvec::DataType::Float16;
+        fp16MatMul.biasInterpretation = nvrhi::coopvec::DataType::Float16;
+        fp16MatMul.outputType = nvrhi::coopvec::DataType::Float16;
+        fp16MatMul.transposeSupported = true;
+
+        const nvrhi::coopvec::MatMulFormatSupport fp16MatMulSupport = device->queryCoopVecMatMulFormatSupport(fp16MatMul);
+        m_coopVectorFeatures.fp16InferenceSupported = fp16MatMulSupport.supported;
     }
+
+    if (m_coopVectorFeatures.trainingSupported)
+    {
+        const nvrhi::coopvec::TrainingFormatSupport fp16TrainingSupport = device->queryCoopVecTrainingFormatSupport(nvrhi::coopvec::DataType::Float16);
+        m_coopVectorFeatures.fp16TrainingSupported = fp16TrainingSupport.bufferTrainingSupported;
+    }
+
 #if DONUT_WITH_DX12
     if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::D3D12)
     {
-        // Mute preview shader model (6.9) validation warning.
+        // Mute preview shader model validation warning.
         ID3D12Device* d3d12Device = device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
         Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue;
         if (d3d12Device->QueryInterface(IID_PPV_ARGS(&infoQueue)) == S_OK)

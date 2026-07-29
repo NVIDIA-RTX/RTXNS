@@ -29,20 +29,41 @@ namespace mlp
     // Operates on cooperative vectors of 1 to 128 components 
     interface ILoss<T : __BuiltinFloatingPointType, let K : int>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale);
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale);
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon);
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon);
     };
 
     // Conversion functions for using standard float vectors of 1 to 4 components with the loss interface
     static vector<float, K> LossValueFromVector<
         let K : int, 
         Loss : ILoss<float, K>>
-        (vector<float, K> target, vector<float, K> predicted, vector<float, K> scale)
+        (vector<float, K> target, vector<float, K> predicted, vector<float, K> scale, Optional<float> epsilon)
     {
         return VectorFromCoopVec<float, K>(Loss.value(
             CoopVecFromVector<float, K>(target),
             CoopVecFromVector<float, K>(predicted),
-            CoopVecFromVector<float, K>(scale)));
+            CoopVecFromVector<float, K>(scale), 
+            epsilon));
+    }
+
+    static vector<float, K> LossValueFromVector<
+        let K : int, 
+        Loss : ILoss<float, K>>
+        (vector<float, K> target, vector<float, K> predicted, vector<float, K> scale)
+    {
+        return LossValueFromVector<K, Loss>(target, predicted, scale, none);
+    }
+
+    static vector<float, K> LossDerivFromVector<
+        let K : int, 
+        Loss : ILoss<float, K>>
+        (vector<float, K> target, vector<float, K> predicted, vector<float, K> scale, Optional<float> epsilon)
+    {
+        return VectorFromCoopVec<float, K>(Loss.deriv(
+            CoopVecFromVector<float, K>(target), 
+            CoopVecFromVector<float, K>(predicted), 
+            CoopVecFromVector<float, K>(scale), 
+            epsilon));
     }
 
     static vector<float, K> LossDerivFromVector<
@@ -50,22 +71,19 @@ namespace mlp
         Loss : ILoss<float, K>>
         (vector<float, K> target, vector<float, K> predicted, vector<float, K> scale)
     {
-        return VectorFromCoopVec<float, K>(Loss.deriv(
-            CoopVecFromVector<float, K>(target), 
-            CoopVecFromVector<float, K>(predicted), 
-            CoopVecFromVector<float, K>(scale)));
+        return LossDerivFromVector<K, Loss>(target, predicted, scale, none);
     }
 
     // ILoss functions 
     // L1
     struct L1<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
             return scale * abs(predicted - target);
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
             return copysign(scale, predicted - target);
         }
@@ -74,54 +92,60 @@ namespace mlp
     // Relative L1
     struct L1Relative<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return scale * abs(predicted - target) / (abs(predicted) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return scale * abs(predicted - target) / (abs(predicted) + CoopVec<T, K>(T(eps)));
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return copysign(scale, predicted - target) / (abs(predicted) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return copysign(scale, predicted - target) / (abs(predicted) + CoopVec<T, K>(T(eps)));
         }
     };
 
     // Mean absolute percentage error (MAPE)
     struct MAPE<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return scale * abs(predicted - target) / (abs(target) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return scale * abs(predicted - target) / (abs(target) + CoopVec<T, K>(T(eps)));
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return copysign(scale, predicted - target) / (abs(target) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return copysign(scale, predicted - target) / (abs(target) + CoopVec<T, K>(T(eps)));
         }
     };
 
     // Symmetric mean absolute percentage error (SMAPE)
     struct SMAPE<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return scale * abs(predicted - target) / ((abs(target) + abs(predicted)) * T(0.5) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return scale * abs(predicted - target) / ((abs(target) + abs(predicted)) * T(0.5) + CoopVec<T, K>(T(eps)));
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            return copysign(scale, predicted - target) / ((abs(target) + abs(predicted))*T(0.5) + CoopVec<T, K>(T(LOSS_EPSILON)));
+            float eps = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
+            return copysign(scale, predicted - target) / ((abs(target) + abs(predicted))*T(0.5) + CoopVec<T, K>(T(eps)));
         }
     };
 
     // L2 
     struct L2<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
             return scale * (predicted - target) * (predicted - target);
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
             return T(2) * scale * (predicted - target);
         }
@@ -130,18 +154,18 @@ namespace mlp
     // Relative L2
     struct L2Relative<T : __BuiltinFloatingPointType, let K : int> : ILoss<T, K>
     {
-        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> value(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            float sum = LOSS_EPSILON;
+            float sum = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
             [ForceUnroll]
             for (int i = 0; i < K; ++i)
                 sum += target[i].toFloat() * target[i].toFloat();
             return scale * (predicted - target) * (predicted - target) * T(1 / sum);
         }
 
-        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale)
+        static CoopVec<T, K> deriv(CoopVec<T, K> target, CoopVec<T, K> predicted, CoopVec<T, K> scale, Optional<float> epsilon)
         {
-            float sum = LOSS_EPSILON;
+            float sum = select(epsilon.hasValue, epsilon.value, LOSS_EPSILON);
             [ForceUnroll]
             for (int i = 0; i < K; ++i)
                 sum += target[i].toFloat() * target[i].toFloat();

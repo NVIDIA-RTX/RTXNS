@@ -201,10 +201,10 @@ To use cooperative vector operations, you must enable the appropriate features f
 
 #### DirectX 12
 
-Enable experimental shader models and cooperative vector support:
+Enable experimental shader models before device creation. With the DirectX 12 Agility preview SDK (Linear Algebra / cooperative vectors), the runtime does not expose a separate `D3D12CooperativeVectorExperiment` UUID in current DirectX-Headers; the RTXNS samples call `D3D12EnableExperimentalFeatures` with shader models only:
 
 ```c++
-UUID features[] = { D3D12ExperimentalShaderModels, D3D12CooperativeVectorExperiment };
+UUID features[] = { D3D12ExperimentalShaderModels };
 HRESULT hr = D3D12EnableExperimentalFeatures(_countof(features), features, nullptr, nullptr);
 ```
 

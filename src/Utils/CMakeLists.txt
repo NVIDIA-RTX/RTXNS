@@ -13,7 +13,7 @@ set(shader_includes
 	${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021" )
+set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021 --embedPDB")
 
 set(SHADER_COMPILE_OPTIONS_SPIRV "-X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV -capability spvAtomicFloat32AddEXT -capability spvAtomicFloat32MinMaxEXT\" " )
 
@@ -60,4 +60,4 @@ set_target_properties(${project} PROPERTIES
 	FOLDER ${folder}
 )
 
-set(SAMPLE_UTILITES_DIR ${CMAKE_CURRENT_LIST_DIR} CACHE PATH "" FORCE)
+set(NS_SAMPLE_UTILITIES_DIR ${CMAKE_CURRENT_LIST_DIR} CACHE PATH "" FORCE)

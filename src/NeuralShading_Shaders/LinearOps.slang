@@ -15,13 +15,13 @@ namespace rtxns
 {
     // Linear (without activation function) forward step of MLP using Cooperative Vector extension functions
     // Weights matrix and biases vector are stored in a byteaddress buffer at offsets matrixOffset and biasOffset
-    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
-        CoopVec<T, K> ip, 
-        ByteAddressBuffer matrixBiasBuffer, 
-        uint matrixOffset, 
-        uint biasOffset, 
-        constexpr CoopVecMatrixLayout matrixLayout, 
-        constexpr CoopVecComponentType componentType)
+    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int,
+        let matrixLayout : CoopVecMatrixLayout,
+        let componentType : CoopVecComponentType>(
+        CoopVec<T, K> ip,
+        ByteAddressBuffer matrixBiasBuffer,
+        uint matrixOffset,
+        uint biasOffset)
     {
         return coopVecMatMulAdd<T, M>(
             ip, 
@@ -41,15 +41,15 @@ namespace rtxns
     // One linear backward step of MLP using Cooperative Vector extension functions
     // Weights matrix and biases vector are stored in byteaddress buffer at offsets matrixOffset and biasOffset
     // Derivates of weights matrix and derivatives of biases vector are stored in read write byteaddress buffer at offsets matrixOffset and biasOffset
-    CoopVec<T, K> LinearOp_Backward<T : __BuiltinFloatingPointType, let M : int, let K : int>(
-        CoopVec<T, K> ip, 
-        CoopVec<T, M> grad, 
-        ByteAddressBuffer matrixBiasBuffer, 
-        RWByteAddressBuffer matrixBiasBufferDerivative, 
-        uint matrixOffset, 
-        uint biasOffset, 
-        constexpr CoopVecMatrixLayout matrixLayout, 
-        constexpr CoopVecComponentType componentType)
+    CoopVec<T, K> LinearOp_Backward<T : __BuiltinFloatingPointType, let M : int, let K : int,
+        let matrixLayout : CoopVecMatrixLayout,
+        let componentType : CoopVecComponentType>(
+        CoopVec<T, K> ip,
+        CoopVec<T, M> grad,
+        ByteAddressBuffer matrixBiasBuffer,
+        RWByteAddressBuffer matrixBiasBufferDerivative,
+        uint matrixOffset,
+        uint biasOffset)
     {
         coopVecOuterProductAccumulate(grad, ip, matrixBiasBufferDerivative, matrixOffset, 0, matrixLayout, componentType);
         coopVecReduceSumAccumulate(grad, matrixBiasBufferDerivative, biasOffset);
@@ -91,43 +91,39 @@ namespace mlp
     };
 
     // Linear forward step of MLP using MatrixBiasBuffer structure to store weights and biases
-    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
-        CoopVec<T, K> ip, 
-        MatrixBiasBuffer matrixBiasBuffer, 
-        uint2 offsets,
-        constexpr CoopVecMatrixLayout matrixLayout, 
-        constexpr CoopVecComponentType componentType)
+    [BackwardDerivative(LinearOp_BackwardAutoDiff)]
+    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int,
+        let matrixLayout : CoopVecMatrixLayout,
+        let componentType : CoopVecComponentType>(
+        CoopVec<T, K> ip,
+        MatrixBiasBuffer matrixBiasBuffer,
+        uint2 offsets)
     {
-        return LinearOp<T, M, K>(
-            ip, 
-            matrixBiasBuffer.buffer, 
-            offsets[0], 
-            offsets[1], 
-            matrixLayout, 
-            componentType
+        return LinearOp<T, M, K, matrixLayout, componentType>(
+            ip,
+            matrixBiasBuffer.buffer,
+            offsets[0],
+            offsets[1]
         );
     }
 
     // Linear backward step of MLP using MatrixBiasBuffer and MatrixBiasBufferDifferential
-    [BackwardDerivativeOf(LinearOp)]
-    void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let K : int>( 
-        inout DifferentialPair<CoopVec<T, K>> ip, 
-        DifferentialPtrPair<MatrixBiasBuffer> matrixBiasBuffer, 
-        uint2 offsets,
-        constexpr CoopVecMatrixLayout matrixLayout, 
-        constexpr CoopVecComponentType componentType, CoopVec<T, M>.Differential grad)
+    void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let K : int,
+        let matrixLayout : CoopVecMatrixLayout,
+        let componentType : CoopVecComponentType>(
+        inout DifferentialPair<CoopVec<T, K>> ip,
+        DifferentialPtrPair<MatrixBiasBuffer> matrixBiasBuffer,
+        uint2 offsets, CoopVec<T, M>.Differential grad)
     {
         ip = diffPair(
-            ip.p, 
-            LinearOp_Backward<T, M, K>(
-                ip.p, 
-                grad, 
-                matrixBiasBuffer.p.buffer, 
-                matrixBiasBuffer.d.buffer, 
-                offsets[0], 
-                offsets[1], 
-                matrixLayout, 
-                componentType
+            ip.p,
+            LinearOp_Backward<T, M, K, matrixLayout, componentType>(
+                ip.p,
+                grad,
+                matrixBiasBuffer.p.buffer,
+                matrixBiasBuffer.d.buffer,
+                offsets[0],
+                offsets[1]
             )
         );
     }

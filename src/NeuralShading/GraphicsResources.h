@@ -11,6 +11,7 @@
 #pragma once
 
 #include <nvrhi/nvrhi.h>
+#include <string>
 
 #if DONUT_WITH_DX12
 #define NV_SHADER_EXTN_REGISTER_SPACE 0
@@ -24,9 +25,17 @@ struct CoopVectorFeatures
 {
     bool inferenceSupported = false;
     bool trainingSupported = false;
-    bool fp16InferencingSupported = false;
+    bool fp16InferenceSupported = false;
     bool fp16TrainingSupported = false;
 };
+
+enum class CoopVectorRequirement
+{
+    Inference,
+    Training
+};
+
+std::string GetMissingCoopVectorFeatures(const CoopVectorFeatures& features, CoopVectorRequirement requirement);
 
 class GraphicsResources
 {

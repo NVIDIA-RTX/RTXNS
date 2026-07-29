@@ -52,7 +52,7 @@ namespace mlp
         [Differentiable]
         CoopVec<T, K> eval(CoopVec<T, K> x)
         {
-            return no_diff CoopVec<T, K>(a) * x;
+            return scale(x, a);
         }
     };
 
@@ -73,7 +73,7 @@ namespace mlp
         [Differentiable]
         CoopVec<T, K> eval(CoopVec<T, K> x)
         {
-            return exp(x) - no_diff CoopVec<T, K>(T(1.));
+            return shiftedExp(x);
         }
     };
 
@@ -121,7 +121,7 @@ namespace mlp
         [Differentiable]
         CoopVec<T, K> eval(CoopVec<T, K> x)
         {
-            return x / (no_diff CoopVec<T, K>(T(1.)) + exp(no_diff CoopVec<T, K>(T(-1.)) * x));
+            return swish(x);
         }
     };
 
@@ -131,8 +131,7 @@ namespace mlp
         [Differentiable]
         CoopVec<T, K> eval(CoopVec<T, K> x)
         {
-            var c1 = no_diff CoopVec<T, K>(T(1.));
-            return no_diff CoopVec<T, K>(T(2.)) / (c1 + exp(no_diff CoopVec<T, K>(T(-2.)) * x)) - c1;
+            return tanhCoopVec(x);
         }
     };
 }

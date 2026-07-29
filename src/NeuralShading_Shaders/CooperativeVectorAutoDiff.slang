@@ -8,7 +8,7 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-import CooperativeVectorFunctions;
+__exported import CooperativeVectorFunctions;
 import CooperativeVectorDerivatives;
 
 // Implementation to extend CoopVec to make it automatically differentiable (autodiff)
@@ -20,9 +20,15 @@ namespace rtxns
 extension<T : __BuiltinFloatingPointType, let K : int> CoopVec<T, K> : IDifferentiable
 {
     typealias Differential = CoopVec<T, K>;
+
+    [Differentiable]
+    static Differential dadd(Differential a, Differential b) { return no_diff a.add(b); }
+
+    [Differentiable]
+    static Differential dzero() { return no_diff Differential(T(0.f)); }
 };
 
-typealias HCoopVec<let K : int> = CoopVec<half, K>;
+public typealias HCoopVec<let K : int> = CoopVec<half, K>;
 
 ////////////////////////
 //
@@ -65,6 +71,27 @@ void leakyRelu_BackwardAutoDiff<T : __BuiltinFloatingPointType, let K : int>(ino
 void sigmoid_BackwardAutoDiff<T : __BuiltinFloatingPointType, let K : int>(inout DifferentialPair<CoopVec<T, K>> p0, CoopVec<T, K>.Differential dResult)
 {
     p0 = diffPair(p0.p, sigmoid_Derivative(p0.p, dResult));
+}
+
+// Shifted exponential backward derivative
+[BackwardDerivativeOf(shiftedExp)]
+void shiftedExp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let K : int>(inout DifferentialPair<CoopVec<T, K>> p0, CoopVec<T, K>.Differential dResult)
+{
+    p0 = diffPair(p0.p, shiftedExp_Derivative(p0.p, dResult));
+}
+
+// Swish backward derivative
+[BackwardDerivativeOf(swish)]
+void swish_BackwardAutoDiff<T : __BuiltinFloatingPointType, let K : int>(inout DifferentialPair<CoopVec<T, K>> p0, CoopVec<T, K>.Differential dResult)
+{
+    p0 = diffPair(p0.p, swish_Derivative(p0.p, dResult));
+}
+
+// Tanh backward derivative
+[BackwardDerivativeOf(tanhCoopVec)]
+void tanhCoopVec_BackwardAutoDiff<T : __BuiltinFloatingPointType, let K : int>(inout DifferentialPair<CoopVec<T, K>> p0, CoopVec<T, K>.Differential dResult)
+{
+    p0 = diffPair(p0.p, tanhCoopVec_Derivative(p0.p, dResult));
 }
 
 }

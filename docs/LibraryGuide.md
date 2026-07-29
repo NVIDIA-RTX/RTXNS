@@ -359,6 +359,15 @@ struct Adam : IOptimizer
 }
 ```
 
+### Loss Module 
+This module provides a generic loss-function interface for vectorized training/inference code along with implementations of common loss functions.
+
+The interface provides:
+- `value(...)`: computes the per-element loss for `predicted` vs. `target`, optionally using `scale` and an optional `epsilon` for numerical stability.
+- `deriv(...)`: computes the per-element derivative of the loss with respect to `predicted`, using the same inputs and optional `epsilon`.
+- `epsilon` may be supplied by the caller to control stability behavior or omitted (`none`) to use an implementation-defined default.
+
+
 ### Utility Module
 
 This module provides functionality for input encoding and packing weight and bias buffer offsets
@@ -388,6 +397,15 @@ The `UnpackArray` function is used to unpack the weight and bias offsets from a 
 ```
 uint[NUM_UNPACKED] UnpackArray<let NUM_PACKED4 : int, let NUM_UNPACKED : int>(uint4 ps[NUM_PACKED4])
 ```
+
+The `SanitizeEpsilon` function lamps a caller-provided `epsilon` into a safe, predefined range so it remains **positive** and **small**.  
+This prevents invalid values (e.g., zero, negative, or excessively large epsilons) from destabilizing loss computations (such as `log()` or division), while still allowing `epsilon` to be tuned within reasonable bounds.
+This function should be used prior to replacing the default epsilon value in the [Loss Module] functions.
+
+```
+float SanitizeEpsilon<T : __BuiltinFloatingPointType>(float value)
+```
+
 ### LossAccumulation Module
 
 The LossAccumulation module provides a lightweight, GPU-friendly system for accumulating floating-point loss components into a `RWByteAddressBuffer`.

@@ -50,7 +50,8 @@ All of the samples are built using Slang and can be compiled to either DX12 or V
 - [Vulkan Cooperative Vector extension](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_NV_cooperative_vector.html).
 
 ## Driver Requirements
-- Using the DirectX Preview Agility SDK requires a shader model 6.9 preview driver:
+- The default DirectX configuration uses Agility SDK `1.721.2-preview` with Shader Model 6.10 and requires a compatible [GeForce preview driver](https://developer.nvidia.com/downloads/assets/secure/geforce-drivers/620.12_gameready_win11_win10-dch_64bit_international.exe).
+- The legacy `717` / Shader Model 6.9 configuration can be selected with `-DRTXNS_DX12_COOP_VECTOR_PREVIEW=717` and requires a compatible preview driver:
 	- [GeForce](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver)  
 	- [Quadro](https://developer.nvidia.com/downloads/assets/secure/shadermodel6-9-preview-driver-quadro)
 - Vulkan Cooperative Vector extension requires a release [driver](https://www.nvidia.com/en-gb/geforce/drivers) from R570 onwards

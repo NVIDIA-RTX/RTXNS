@@ -22,6 +22,10 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 [Ninja][Ninja]
 
 ### DirectX (Windows only)
+#### 721 Preview
+[DirectX Preview Agility SDK 1.721.2-preview*](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.721.2-preview) **|** [Microsoft DXC v1.10.2605.24*](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.10.2605.24) **|** [Geforce Shader Model 6-10-Preview Driver](https://developer.nvidia.com/downloads/assets/secure/geforce-drivers/620.12_gameready_win11_win10-dch_64bit_international.exe)
+
+#### 717 Preview
 [DirectX Preview Agility SDK 1.717.0-preview*](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.717.0-preview) **|** [Microsoft DXC 1.8.2505.28*](https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2505.28) **|** [Geforce Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver)  **|** [Quadro Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/assets/secure/shadermodel6-9-preview-driver-quadro) 
 
 ### Vulkan (Windows and Linux)

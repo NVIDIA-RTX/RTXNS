@@ -43,13 +43,13 @@ namespace mlp
         // Returns MLP output
         CoopVec<T, OUTPUTS> forward<Act : IActivation<T, HIDDEN>, FinalAct : IActivation<T, OUTPUTS>>(CoopVec<T, INPUTS> inputParams, Act act, FinalAct finalAct)
         {
-            var params = act.eval(LinearOp<T, HIDDEN, INPUTS>(inputParams, parameters, layerOffsets[0], matrixLayout, componentType));
+            var params = act.eval(LinearOp<T, HIDDEN, INPUTS, matrixLayout, componentType>(inputParams, parameters, layerOffsets[0]));
             
             [ForceUnroll]
             for(int i = 1; i < HIDDEN_LAYERS; ++i)
-                params = act.eval(LinearOp<T, HIDDEN, HIDDEN>(params, parameters, layerOffsets[i], matrixLayout, componentType));
+                params = act.eval(LinearOp<T, HIDDEN, HIDDEN, matrixLayout, componentType>(params, parameters, layerOffsets[i]));
 
-            return finalAct.eval(LinearOp<T, OUTPUTS, HIDDEN>(params, parameters, layerOffsets[HIDDEN_LAYERS], matrixLayout, componentType));
+            return finalAct.eval(LinearOp<T, OUTPUTS, HIDDEN, matrixLayout, componentType>(params, parameters, layerOffsets[HIDDEN_LAYERS]));
         }
 
         MatrixBiasBuffer parameters;
@@ -97,13 +97,13 @@ namespace mlp
             no_diff FinalAct finalAct
         )
         {
-            var params = act.eval(LinearOp<T, HIDDEN, INPUTS>(inputParams, parameters, layerOffsets[0], matrixLayout, componentType));
+            var params = act.eval(LinearOp<T, HIDDEN, INPUTS, matrixLayout, componentType>(inputParams, parameters, layerOffsets[0]));
             
             [ForceUnroll]
             for(int i = 1; i < HIDDEN_LAYERS; ++i)
-                params = act.eval(LinearOp<T, HIDDEN, HIDDEN>(params, parameters, layerOffsets[i], matrixLayout, componentType));
+                params = act.eval(LinearOp<T, HIDDEN, HIDDEN, matrixLayout, componentType>(params, parameters, layerOffsets[i]));
 
-            return finalAct.eval(LinearOp<T, OUTPUTS, HIDDEN>(params, parameters, layerOffsets[HIDDEN_LAYERS], matrixLayout, componentType));
+            return finalAct.eval(LinearOp<T, OUTPUTS, HIDDEN, matrixLayout, componentType>(params, parameters, layerOffsets[HIDDEN_LAYERS]));
         }
 
         // Forward step member function

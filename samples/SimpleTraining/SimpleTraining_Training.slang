@@ -65,24 +65,23 @@ void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // Forward propagation through the neural network
     // Input to hidden layer, then apply activation function
-    hiddenParams[0] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-        inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    hiddenParams[0] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
     hiddenActivated[0] = rtxns::leakyReLU(hiddenParams[0], RELU_LEAK);
 
-    // Hidden layers to hidden layers, then apply activation function 
+    // Hidden layers to hidden layers, then apply activation function
     [ForceUnroll]
     for (uint layer = 1; layer < NUM_HIDDEN_LAYERS; layer++)
     {
-        hiddenParams[layer] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-            hiddenActivated[layer - 1], gMLPParams, weightOffsets[layer], biasOffsets[layer], 
-            MATRIX_LAYOUT, TYPE_INTERPRETATION);
+        hiddenParams[layer] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+            hiddenActivated[layer - 1], gMLPParams, weightOffsets[layer], biasOffsets[layer]);
         hiddenActivated[layer] = rtxns::leakyReLU(hiddenParams[layer], RELU_LEAK);
     }
 
-    // Hidden layer to output layer, then apply final activation function    
-    outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
+    // Hidden layer to output layer, then apply final activation function
+    outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
         hiddenActivated[NUM_HIDDEN_LAYERS - 1], gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS],
-        biasOffsets[NUM_HIDDEN_LAYERS], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+        biasOffsets[NUM_HIDDEN_LAYERS]);
     outputActivated = rtxns::sigmoid(outputParams);
 
     // Take the output from the neural network as the output color
@@ -134,24 +133,24 @@ void training_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // Output layer (loss gradient) to final hidden layer
     outputGradient = rtxns::sigmoid_Derivative(outputParams, lossGradientCV);
-    hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
-       hiddenActivated[NUM_HIDDEN_LAYERS - 1], outputGradient, gMLPParams, gMLPParamsGradients, 
-       weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        hiddenActivated[NUM_HIDDEN_LAYERS - 1], outputGradient, gMLPParams, gMLPParamsGradients,
+        weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS]);
 
-    // Hidden layer to hidden layer 
+    // Hidden layer to hidden layer
     for(int layer = NUM_HIDDEN_LAYERS - 1; layer >= 1; layer--)
     {
         hiddenGradient = rtxns::leakyReLU_Derivative(hiddenParams[layer], RELU_LEAK, hiddenGradient);
-        hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>
-            (hiddenActivated[layer - 1], hiddenGradient, gMLPParams, gMLPParamsGradients, 
-            weightOffsets[layer], biasOffsets[layer], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+        hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+            hiddenActivated[layer - 1], hiddenGradient, gMLPParams, gMLPParamsGradients,
+            weightOffsets[layer], biasOffsets[layer]);
     }
 
     // First hidden layer to input layer
     hiddenGradient = rtxns::leakyReLU_Derivative(hiddenParams[0], RELU_LEAK, hiddenGradient);
-    rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-        inputParams, hiddenGradient, gMLPParams, gMLPParamsGradients, weightOffsets[0], 
-        biasOffsets[0], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        inputParams, hiddenGradient, gMLPParams, gMLPParamsGradients, weightOffsets[0],
+        biasOffsets[0]);
 
     // Store the random state to continue iterating next time.
     gRandState[dispatchThreadIdxy] = rng.state;

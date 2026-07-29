@@ -745,10 +745,11 @@ int main(int __argc, const char** __argv)
     }
 
     rtxns::GraphicsResources graphicsResources(deviceManager->GetDevice());
-    if (!graphicsResources.GetCoopVectorFeatures().inferenceSupported && !graphicsResources.GetCoopVectorFeatures().trainingSupported &&
-        !graphicsResources.GetCoopVectorFeatures().fp16InferencingSupported && !graphicsResources.GetCoopVectorFeatures().fp16TrainingSupported)
+    const rtxns::CoopVectorFeatures features = graphicsResources.GetCoopVectorFeatures();
+    const std::string missingFeatures = rtxns::GetMissingCoopVectorFeatures(features, rtxns::CoopVectorRequirement::Training);
+    if (!missingFeatures.empty())
     {
-        log::fatal("Not all required Coop Vector features are available");
+        log::fatal("Missing required Coop Vector features:%s", missingFeatures.c_str());
         return 1;
     }
 

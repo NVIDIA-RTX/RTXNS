@@ -31,14 +31,34 @@ class NetworkParameters(spy.InstanceList):
         weights_np = np.array(data['weights'], dtype=np.float16).reshape((outputs, inputs))
         biases_np = np.array(data['biases'], dtype=np.float16)
 
-        # Convert weights into coopvec layout for training
-        desc = app.device.coopvec_create_matrix_desc(self.outputs, self.inputs, self.layout, spy.DataType.float16, 0)
+        # Convert weights into the device's optimal coopvec inferencing layout.
+        desc = app.device.create_coop_vec_matrix_desc(
+            self.outputs,
+            self.inputs,
+            self.layout,
+            spy.DataType.float16,
+        )
         weight_count = desc.size // 2 # sizeof(half)
         params_np = np.zeros((weight_count, ), dtype=np.float16)
-        app.device.coopvec_convert_matrix_host(weights_np, params_np, dst_layout=self.layout)
+        app.device.convert_coop_vec_matrix(
+            params_np,
+            weights_np,
+            dst_layout=self.layout,
+            src_layout=spy.CoopVecMatrixLayout.row_major,
+        )
 
-        self.biases = app.device.create_buffer(struct_size=2, element_count=self.outputs, data=biases_np)
-        self.weights = app.device.create_buffer(struct_size=2, element_count=weight_count, data=params_np)
+        self.biases = app.device.create_buffer(
+            struct_size=2,
+            element_count=self.outputs,
+            usage=spy.BufferUsage.shader_resource,
+            data=biases_np,
+        )
+        self.weights = app.device.create_buffer(
+            struct_size=2,
+            element_count=weight_count,
+            usage=spy.BufferUsage.shader_resource,
+            data=params_np,
+        )
 
 class Network(spy.InstanceList):
     def __init__(self, data: dict):

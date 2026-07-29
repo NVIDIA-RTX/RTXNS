@@ -56,23 +56,23 @@ float4 DisneyMLP(float NdotL, float NdotV, float NdotH, float LdotH, float rough
    
    // Forward propagation through the neural network
    // Input to hidden layer, then apply activation function
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-       inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
    hiddenParams = rtxns::relu(hiddenParams);
-   
-   // Hidden layer to hidden layer, then apply activation function 
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+
+   // Hidden layer to hidden layer, then apply activation function
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1]);
    hiddenParams = rtxns::relu(hiddenParams);
-   
-   // Hidden layer to hidden layer, then apply activation function    
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+
+   // Hidden layer to hidden layer, then apply activation function
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2]);
    hiddenParams = rtxns::relu(hiddenParams);
-   
+
    // Hidden layer to output layer, then apply final activation function
-   outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3]);
    outputParams = exp(outputParams);
 
     // Take the output from the neural network as the output color

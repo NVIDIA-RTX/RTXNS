@@ -33,4 +33,24 @@ CoopVec<T, K> sigmoid_Derivative<T : __BuiltinFloatingPointType, let K : int>(Co
     return dResult * sigmoidOut * (CoopVec<T, K>(T(1.)) - sigmoidOut);
 }
 
+// Derivative of shifted exponential
+CoopVec<T, K> shiftedExp_Derivative<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> p, CoopVec<T, K> dResult)
+{
+    return dResult * exp(p);
+}
+
+// Derivative of swish
+CoopVec<T, K> swish_Derivative<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> p, CoopVec<T, K> dResult)
+{
+    var sigmoidOut = sigmoid(p);
+    return dResult * (sigmoidOut + p * sigmoidOut * (CoopVec<T, K>(T(1.)) - sigmoidOut));
+}
+
+// Derivative of tanh
+CoopVec<T, K> tanhCoopVec_Derivative<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> p, CoopVec<T, K> dResult)
+{
+    var tanhOut = tanhCoopVec(p);
+    return dResult * (CoopVec<T, K>(T(1.)) - tanhOut * tanhOut);
+}
+
 }

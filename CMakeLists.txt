@@ -51,11 +51,32 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RTXNS_BINARY_DIR}")
 
 set(SHADERMAKE_BIN_OUTPUT_PATH "${RTXNS_BINARY_DIR}/bin" CACHE STRING "Output directory for the ShaderMake executable")
 
-set(SHADERMAKE_DXC_VERSION "v1.8.2505" CACHE STRING "DXC version override" FORCE)
-set(SHADERMAKE_DXC_DATE "2025_05_24" CACHE STRING "DXC date override" FORCE)
+# 717 is retained as a temporary compatibility path for the SM 6.9 preview driver/toolchain.
+# Prefer 721 for new development; The 717 path will be removed once support for the legacy preview driver is dropped.
+set(RTXNS_DX12_COOP_VECTOR_PREVIEW "721" CACHE STRING "DX12 Cooperative Vector preview toolchain to use (721 or 717). Requires a driver compatible with the selected preview; the same driver is not expected to support both.")
+set_property(CACHE RTXNS_DX12_COOP_VECTOR_PREVIEW PROPERTY STRINGS "721" "717")
+
+if("${RTXNS_DX12_COOP_VECTOR_PREVIEW}" STREQUAL "717")
+	set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.717.0-preview" CACHE STRING "D3D12 Agility SDK preview version used for DX12 Cooperative Vector support" FORCE)
+	set(SHADERMAKE_DXC_VERSION "v1.8.2505" CACHE STRING "DXC version override" FORCE)
+	set(SHADERMAKE_DXC_DATE "2025_05_24" CACHE STRING "DXC date override" FORCE)
+	set(SHADERMAKE_SLANG_VERSION "2025.23.1" CACHE STRING "Slang version override" FORCE)
+	set(RTXNS_DX12_SHADER_MODEL "6_9")
+elseif("${RTXNS_DX12_COOP_VECTOR_PREVIEW}" STREQUAL "721")
+	set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.721.2-preview" CACHE STRING "D3D12 Agility SDK preview version used for DX12 Cooperative Vector support" FORCE)
+	set(SHADERMAKE_DXC_VERSION "v1.10.2605.24" CACHE STRING "DXC version override" FORCE)
+	set(SHADERMAKE_DXC_DATE "preview_2026_05_22" CACHE STRING "DXC date override" FORCE)
+	set(SHADERMAKE_SLANG_VERSION "2026.10" CACHE STRING "Slang version override" FORCE)
+	set(RTXNS_DX12_SHADER_MODEL "6_10")
+else()
+	message(FATAL_ERROR "Unsupported RTXNS_DX12_COOP_VECTOR_PREVIEW='${RTXNS_DX12_COOP_VECTOR_PREVIEW}'. Expected '721' or '717'.")
+endif()
+
+# These paths are passed to FetchContent as SOURCE_DIR and are created/populated during configure.
+set(RTXNS_D3D_AGILITY_SDK_FETCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/dx12-agility-sdk-${D3D_AGILITY_SDK_PREVIEW_VERSION}")
+set(RTXNS_DIRECTX_HEADERS_FETCH_DIR "${CMAKE_BINARY_DIR}/_deps/directx_headers-${D3D_AGILITY_SDK_PREVIEW_VERSION}")
 
 option(SHADERMAKE_FIND_SLANG "" ON)
-set(SHADERMAKE_SLANG_VERSION "2025.23.1" CACHE STRING "Slang version override" FORCE)
 
 set(DONUT_SHADERS_OUTPUT_DIR "${RTXNS_BINARY_DIR}/bin/shaders/framework")
 
@@ -72,17 +93,28 @@ endif()
 
 if (DONUT_WITH_DX12)
 	# Get D3D Agility SDK Preview for Coop Vector support
-	set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.717.0-preview")
+	set(RTXNS_DIRECTX_HEADERS_GIT_TAG "v${D3D_AGILITY_SDK_PREVIEW_VERSION}" CACHE STRING "DirectX-Headers git tag or commit used by NVRHI" FORCE)
+	set(NVRHI_DIRECTX_HEADERS_GIT_TAG "${RTXNS_DIRECTX_HEADERS_GIT_TAG}" CACHE STRING "DirectX-Headers git tag or commit used by NVRHI" FORCE)
+	set(NVRHI_DIRECTX_HEADERS_FETCH_DIR "${RTXNS_DIRECTX_HEADERS_FETCH_DIR}" CACHE STRING "Source directory for fetched DirectX-Headers" FORCE)
 	set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${D3D_AGILITY_SDK_PREVIEW_VERSION}")
-	set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/dx12-agility-sdk" CACHE STRING "" FORCE)
+	set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "${RTXNS_D3D_AGILITY_SDK_FETCH_DIR}" CACHE STRING "" FORCE)
+	unset(_d3d_agility_include CACHE)
+	unset(DONUT_D3D_AGILITY_SDK_CORE_DLL CACHE)
+	unset(DONUT_D3D_AGILITY_SDK_LAYERS_DLL CACHE)
 	include("${CMAKE_CURRENT_SOURCE_DIR}/external/donut/cmake/FetchAgilitySDK.cmake")
 	include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/ConfigureAgilitySDK.cmake")
-	
+
 	# Get NVAPI
 	include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchNVAPI.cmake")
 endif()
 
 add_subdirectory(external/donut)
+
+# DXC headers (dx/linalg.h) are at <DXC root>/inc/hlsl; must run after ShaderMake sets SHADERMAKE_DXC_PATH in Donut.
+if(DONUT_WITH_DX12)
+	cmake_path(GET SHADERMAKE_DXC_PATH PARENT_PATH _DXC_EXE_DIR)
+	cmake_path(SET DXC_HLSL_INCLUDE_DIR NORMALIZE "${_DXC_EXE_DIR}/../../inc/hlsl")
+endif()
 add_subdirectory(src)
 add_subdirectory(samples)
 set_property (DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT SimpleInferencing)

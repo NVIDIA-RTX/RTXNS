@@ -9,7 +9,7 @@
  */
 
 #if DONUT_WITH_DX12
-#include "../../../external/dx12-agility-sdk/build/native/include/d3d12.h"
+#include <directx/d3d12.h>
 #endif
 
 #include "DeviceUtils.h"
@@ -155,13 +155,18 @@ void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& devi
 #if DONUT_WITH_DX12
     if (graphicsApi == nvrhi::GraphicsAPI::D3D12)
     {
-        UUID Features[] = { D3D12ExperimentalShaderModels, D3D12CooperativeVectorExperiment };
+        UUID Features[] = {
+            D3D12ExperimentalShaderModels,
+#if D3D12_PREVIEW_SDK_VERSION == 717
+            D3D12CooperativeVectorExperiment,
+#endif
+        };
         HRESULT hr = D3D12EnableExperimentalFeatures(_countof(Features), Features, nullptr, nullptr);
 
         if (FAILED(hr))
         {
             char const* messageText =
-                "Couldn't enable D3D12 experimental shader models. Cooperative Vector features will not be available.\n"
+                "Couldn't enable D3D12 experimental shader model / cooperative vector features. Cooperative Vector features will not be available.\n"
                 "Please make sure that Developer Mode is enabled in the Windows system settings.";
 
             if (windowTitle)

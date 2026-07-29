@@ -37,6 +37,25 @@ CoopVec<T, K> sigmoid<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K>
     return c1 / (c1 + exp(CoopVec<T, K>(T(-1.)) * v));
 }
 
+// Shifted exponential function implementation
+CoopVec<T, K> shiftedExp<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> v)
+{
+    return exp(v) - CoopVec<T, K>(T(1.));
+}
+
+// Swish function implementation
+CoopVec<T, K> swish<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> v)
+{
+    return v * sigmoid(v);
+}
+
+// Tanh function implementation
+CoopVec<T, K> tanhCoopVec<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> v)
+{
+    var c1 = CoopVec<T, K>(T(1.));
+    return CoopVec<T, K>(T(2.)) / (c1 + exp(CoopVec<T, K>(T(-2.)) * v)) - c1;
+}
+
 // copysign function implementation
 CoopVec<T, K> copysign<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> a, CoopVec<T, K> b)
 {
@@ -57,6 +76,12 @@ CoopVec<T, K> abs<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> v)
         v[i] = abs(v[i]);
     }
     return v;
+}
+
+[Differentiable]
+CoopVec<T, K> scale<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> x, no_diff T s)
+{
+    return x * no_diff CoopVec<T, K>(s);
 }
 
 

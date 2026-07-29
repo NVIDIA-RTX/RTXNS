@@ -37,26 +37,22 @@ void inference_cs(uint3 dispatchThreadID : SV_DispatchThreadID)
    
     // Forward propagation through the neural network
     // Input to hidden layer, then apply activation function
-    hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-        inputParams, gMLPParams, weightOffsets[0], biasOffsets[0],
-        MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
     hiddenParams = rtxns::leakyReLU(hiddenParams, RELU_LEAK);
 
-    // Hidden layers to hidden layers, then apply activation function 
+    // Hidden layers to hidden layers, then apply activation function
     [ForceUnroll]
     for (uint layer = 1; layer < NUM_HIDDEN_LAYERS; layer++)
     {
-        hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-            hiddenParams, gMLPParams, weightOffsets[layer], 
-            biasOffsets[layer], 
-            MATRIX_LAYOUT, TYPE_INTERPRETATION);
+        hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+            hiddenParams, gMLPParams, weightOffsets[layer], biasOffsets[layer]);
         hiddenParams = rtxns::leakyReLU(hiddenParams, RELU_LEAK);
     }
 
     // Hidden layer to output layer, then apply final activation function
-    outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
-        hiddenParams, gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS],
-        MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        hiddenParams, gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS]);
     outputParams = rtxns::sigmoid(outputParams);
 
     // Take the output from the neural network as the output color

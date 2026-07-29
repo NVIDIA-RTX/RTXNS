@@ -10,15 +10,9 @@
 include(compileshaders)
 
 set(shader_includes
-	${SAMPLES_SHADER_INCLUDE_DIR}
+	${NS_SAMPLE_SHADER_INCLUDES_COMMON}
 	${CMAKE_CURRENT_LIST_DIR}
 )
-
-set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021" )
-
-set(SHADER_COMPILE_OPTIONS_SPIRV " -X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV\" " )
-
-set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
 
 set(project SlangpyInferencing)
 set(folder "Samples/SlangpyInferencing")
@@ -32,9 +26,10 @@ donut_compile_shaders_all_platforms(
 	INCLUDES ${shader_includes}
     FOLDER ${folder}
     OUTPUT_BASE ${RTXNS_BINARY_DIR}/shaders/${project}
-	SHADERMAKE_OPTIONS ${SHADER_COMPILE_OPTIONS}
-    SHADERMAKE_OPTIONS_SPIRV ${SHADER_COMPILE_OPTIONS_SPIRV}
-	SHADERMAKE_OPTIONS_DXIL ${SHADER_COMPILE_OPTIONS_DXIL}
+	SHADERMAKE_OPTIONS ${NS_SAMPLE_SHADER_COMPILE_OPTIONS}
+    SHADERMAKE_OPTIONS_SPIRV ${NS_SAMPLE_SHADER_COMPILE_OPTIONS_SPIRV}
+	SHADERMAKE_OPTIONS_DXIL ${NS_SAMPLE_SHADER_COMPILE_OPTIONS_DXIL}
+	SHADER_MODEL ${NS_SAMPLE_SHADER_MODEL}
     SOURCES ${${project}_shaders}
     SLANG
 )

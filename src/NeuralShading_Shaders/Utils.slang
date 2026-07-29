@@ -12,6 +12,8 @@ import CooperativeVectorAutoDiff;
 
 namespace rtxns
 {
+    static const float PI = 3.14159265358979323846f;
+
     ////////////////////////
     //
     // Encoders for input parameters
@@ -32,7 +34,7 @@ namespace rtxns
         for (int i = 0; i < PARAMS_COUNT; ++i)
         {
             float sn, cn;
-            sincos(parameters[i] * 3.14159265358979323846, sn, cn);
+            sincos(parameters[i] * PI, sn, cn);
 
             int i1 = i * FREQUENCY_ENCODING_COUNT;
             output[i1 + 0] = T(sn);
@@ -50,7 +52,7 @@ namespace rtxns
     [Differentiable]
     CoopVec<T, NUM_SCALES * PARAMS_COUNT * 2> EncodeFrequencyN<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int, let NUM_SCALES : int>(CoopVec<T, PARAMS_COUNT> inputParams)
     {
-        var inputVec = VectorFromCoopVec(inputParams);
+        var inputArray = ArrayFromCoopVec(inputParams);
         float[NUM_SCALES * PARAMS_COUNT * 2] outputVec;
 
         [ForceUnroll]
@@ -59,7 +61,7 @@ namespace rtxns
             const int base = i * NUM_SCALES * 2;
 
             float sn, cn;
-            sincos(inputVec[i] * 3.141592653589793238f, sn, cn);
+            sincos(inputArray[i] * PI, sn, cn);
             outputVec[base + 0] = sn;
             outputVec[base + 1] = cn;
             [ForceUnroll]
@@ -152,6 +154,32 @@ namespace rtxns
         parameters = diffPair(parameters.p, gradArray);
     }
 
+    // Convert a CoopVec to a float array
+    [BackwardDerivative(ArrayFromCoopVec_Backward)]
+    float[PARAMS_COUNT] ArrayFromCoopVec<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int>(CoopVec<T, PARAMS_COUNT> parameters)
+    {
+        float result[PARAMS_COUNT];
+
+        [ForceUnroll]
+        for (int i = 0; i < PARAMS_COUNT; ++i)
+        {
+            result[i] = parameters[i].toFloat();
+        }
+        return result;
+    }
+    void ArrayFromCoopVec_Backward<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int>(inout DifferentialPair<CoopVec<T, PARAMS_COUNT>> parameters, float[PARAMS_COUNT] grad)
+    {
+        CoopVec<T, PARAMS_COUNT> gradParams;
+
+        [ForceUnroll]
+        for (int i = 0; i < PARAMS_COUNT; ++i)
+        {
+            gradParams[i] = T(grad[i]);
+        }
+
+        parameters = diffPair(parameters.p, gradParams);
+    }
+    
     // Construct a CoopVec from a float vector of up to 4 parameters
     [BackwardDerivative(CoopVecFromVector_Backward)]
     CoopVec<T, PARAMS_COUNT> CoopVecFromVector<T : __BuiltinFloatingPointType, let PARAMS_COUNT : int>(vector<float, PARAMS_COUNT> parameters)
@@ -202,5 +230,14 @@ namespace rtxns
         }
 
         parameters = diffPair(parameters.p, gradParams);
+    }
+
+    // Ensure the epsilon value is positive and within the allowed range.
+    static const float MIN_EPSILON_VALUE = 1e-12;
+    static const float MAX_EPSILON_VALUE = 1e-2;
+
+    float SanitizeEpsilon<T : __BuiltinFloatingPointType>(float value)
+    {
+        return clamp(value, MIN_EPSILON_VALUE, MAX_EPSILON_VALUE);
     }
 }
