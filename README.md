@@ -13,7 +13,7 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 ## Requirements
 
 ### General
-[CMake v3.24.3][CMake] **|** [Slang v2025.23.1*](https://shader-slang.com/tools/)
+[CMake v3.24.3][CMake] **|** [Slang v2026.10](https://shader-slang.com/tools/)
 
 ### Windows 
 [VS 2022][VS22]
