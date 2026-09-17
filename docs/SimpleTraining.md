@@ -48,11 +48,12 @@ On the host, the setup of the neural network is quite simple. A network architec
 
 ### Network Creation
 
-This will allocate a contiguous block of host memory for the weights and biases that is correctly sized for the a host layout and the input network parameters and the data will be initialized from a normalized distribution. A device optimal layout for training is also created.
+This allocates a contiguous block of host memory for the weights and biases, sized for the host layout, and initializes the parameters from a normal distribution. It also creates a device-optimal layout for training.
 
 ```
 // Create Network
-m_NeuralNetwork = std::make_unique<rtxns::Network>(GetDevice());
+m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
+m_neuralNetwork = std::make_unique<rtxns::HostNetwork>(m_networkUtils);
 ...
 rtxns::NetworkArchitecture netArch = {};
 netArch.inputNeurons = INPUT_NEURONS;
@@ -62,7 +63,7 @@ netArch.numHiddenLayers = NUM_HIDDEN_LAYERS;
 netArch.biasPrecision = NETWORK_PRECISION;
 netArch.weightPrecision = NETWORK_PRECISION;
 ...
-m_NeuralNetwork->Initialise(netArch)
+m_neuralNetwork->Initialise(netArch);
 ...
 // Get a device optimized layout
 m_deviceNetworkLayout = m_networkUtils->GetNewMatrixLayout(m_neuralNetwork->GetNetworkLayout(), rtxns::MatrixLayout::TrainingOptimal);
@@ -81,13 +82,13 @@ There are hard GPU specific requirements on the alignment and size of each layer
 
 ```
 nvrhi::BufferDesc paramsBufferDesc;
-paramsBufferDesc.byteSize = m_NeuralNetwork->GetNetworkParams().size();
+paramsBufferDesc.byteSize = m_neuralNetwork->GetNetworkParams().size();
 ...
 m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 ...
-m_CommandList->writeBuffer(m_mlpHostBuffer, m_NeuralNetwork->GetNetworkParams().data(), m_NeuralNetwork->GetNetworkParams().size());
+m_commandList->writeBuffer(m_mlpHostBuffer, m_neuralNetwork->GetNetworkParams().data(), m_neuralNetwork->GetNetworkParams().size());
 
-paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkByteSize;
 ...
 m_mlpDeviceBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
@@ -101,9 +102,9 @@ m_networkUtils->ConvertWeights(m_neuralNetwork->GetNetworkLayout(), m_deviceNetw
 This sample uses float16 precision for the weights and biases. The reduced precision helps to improve the performance of the network but at the cost of accuracy. As such, there are several things that are required to ensure the loss of precision does not cause underflow/overflow issues in the gradient and loss calculations. We need to keep a float32 version of the parameter buffer on the GPU to ensure the loss adjustments in the optimizer are done in full 32-bit precision, before being copied back to the reduced 16-bit precision buffer for the training shaders. Therefore, a float32 GPU parameter buffer is also needed.
 
 ```
-paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float); // convert to float
+paramsBufferDesc.byteSize = m_totalParamCount * sizeof(float); // convert to float
 paramsBufferDesc.structStride = sizeof(float);
-m_MLPParametersfBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+m_mlpDeviceFloatBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 ```
 
 #### Gradient Buffer
@@ -112,9 +113,9 @@ After the back propagation phase of the training shader, the gradients for each 
 
 ```
 paramsBufferDesc.debugName = "MLPGradientsBuffer";
-paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float16_t);
+paramsBufferDesc.byteSize = m_totalParamCount * sizeof(float16_t);
 paramsBufferDesc.format = nvrhi::Format::R16_FLOAT;
-m_MLPGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
+m_mlpGradientsBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 ```
 
 #### Moments Buffers
@@ -124,12 +125,12 @@ The last important buffers to allocate are required for the Adam optimizer phase
 ```
 paramsBufferDesc.debugName = "MLPMoments1Buffer";
 paramsBufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
-paramsBufferDesc.byteSize = m_TotalParamCount * sizeof(float);
+paramsBufferDesc.byteSize = m_totalParamCount * sizeof(float);
 paramsBufferDesc.format = nvrhi::Format::R32_FLOAT;
-m_MLPMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
+m_mlpMoments1Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 ...
 paramsBufferDesc.debugName = "MLPMoments2Buffer";
-m_MLPMoments2Buffer = GetDevice()->createBuffer(paramsBufferDesc);
+m_mlpMoments2Buffer = GetDevice()->createBuffer(paramsBufferDesc);
 ```
 
 ### Weight and Bias Offsets
@@ -161,34 +162,37 @@ The size of the batches should be tuned to your model.
 for (uint32_t batch = 0; batch < BATCH_COUNT; batch++)
 {
     // run the training pass
-    state.bindings = { m_TrainingPass.m_BindingSet };
-    state.pipeline = m_TrainingPass.m_Pipeline;
-    m_CommandList->beginMarker("Training");
-    m_CommandList->setComputeState(state);
-    m_CommandList->dispatch(dm::div_ceil(BATCH_SIZE_X, 8), dm::div_ceil(BATCH_SIZE_Y, 8), 1);
-    m_CommandList->endMarker();
+    neuralConstants.currentStep = m_adamCurrentStep;
+    neuralConstants.learningRate = m_learningRateScheduler->GetLearningRate(m_adamCurrentStep);
+    m_commandList->writeBuffer(m_neuralConstantBuffer, &neuralConstants, sizeof(NeuralConstants));
+
+    state.bindings = { m_trainingPass.bindingSet };
+    state.pipeline = m_trainingPass.pipeline;
+    m_commandList->beginMarker("Training");
+    m_commandList->setComputeState(state);
+    m_commandList->dispatch(dm::div_ceil(BATCH_SIZE_X, THREADS_PER_GROUP_X), dm::div_ceil(BATCH_SIZE_Y, THREADS_PER_GROUP_Y), 1);
+    m_commandList->endMarker();
 
     // optimizer pass
-    state.bindings = { m_OptimizerPass.m_BindingSet };
-    state.pipeline = m_OptimizerPass.m_Pipeline;
-    m_CommandList->beginMarker("Update Weights");
-    m_CommandList->setComputeState(state);
-    m_CommandList->dispatch(dm::div_ceil(m_TotalParamCount, 32), 1, 1);
-    m_CommandList->endMarker();
+    state.bindings = { m_optimizerPass.bindingSet };
+    state.pipeline = m_optimizerPass.pipeline;
+    m_commandList->beginMarker("Update Weights");
+    m_commandList->setComputeState(state);
+    m_commandList->dispatch(dm::div_ceil(m_totalParamCount, THREADS_PER_GROUP_OPTIMIZE), 1, 1);
+    m_commandList->endMarker();
 
-    neuralConstants.currentStep = ++m_AdamCurrentStep;
-    m_CommandList->writeBuffer(m_NeuralConstantBuffer, &neuralConstants, sizeof(neuralConstants));
+    m_adamCurrentStep++;
 }
-m_uiParams->epochs++;
+m_uiData.epochs++;
 
 ...
 // inference pass
-state.bindings = { m_InferencePass.m_BindingSet };
-state.pipeline = m_InferencePass.m_Pipeline;
-m_CommandList->beginMarker("Inference");
-m_CommandList->setComputeState(state);
-m_CommandList->dispatch(dm::div_ceil(m_InferenceTexture->getDesc().width, 8), dm::div_ceil(m_InferenceTexture->getDesc().height, 8), 1);
-m_CommandList->endMarker();
+state.bindings = { m_inferencePass.bindingSet };
+state.pipeline = m_inferencePass.pipeline;
+m_commandList->beginMarker("Inference");
+m_commandList->setComputeState(state);
+m_commandList->dispatch(dm::div_ceil(m_inferenceTexture->getDesc().width, THREADS_PER_GROUP_X), dm::div_ceil(m_inferenceTexture->getDesc().height, THREADS_PER_GROUP_Y), 1);
+m_commandList->endMarker();
 ```
 
 ### Storing the Trained Network
@@ -211,10 +215,10 @@ When the `save` button is selected in the UI, the sample will store the trained 
 The neural network in this sample is trying to encode a simple RGB lookup using UV coordinates as shown below :
 
 ```
-float4 colour = inputTexture[uv].rgb;
+float3 colour = inputTexture[uv].rgb;
 ```
 
-Using pytorch, the network will look like the following:
+Using PyTorch, the network would look like the following:
 
 ```
 nn.Linear(2, hidden_layer_size),  # UV as input
@@ -238,7 +242,7 @@ The training runs in batches using randomly generated inputs which are passed fo
 The input data is frequency encoded to provide a richer input for the network. This isn't always necessary, but was found to give a 2x performance boost and a quality boost in this case. RTXNS provides some different options for encoding, but this sample uses `EncodeFrequency()`
 
 ```
-// Get a random uv coordinate for the input and frequency encode it for improved convergance
+// Get a random UV coordinate and frequency-encode it for improved convergence.
 float2 inputUV = clamp(float2(rng.next(), rng.next()), 0.0, 1.0);
 CoopVec<VECTOR_FORMAT, INPUT_NEURONS> inputParams = rtxns::EncodeFrequency<half, 2>({inputUV.x, inputUV.y});
 ```
@@ -254,24 +258,23 @@ CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputActivated;
 
 // Forward propagation through the neural network
 // Input to hidden layer, then apply activation function
-hiddenParams[0] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-    inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+hiddenParams[0] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+    inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
 hiddenActivated[0] = rtxns::leakyReLU(hiddenParams[0], RELU_LEAK);
 
 // Hidden layers to hidden layers, then apply activation function 
 [ForceUnroll]
 for (uint layer = 1; layer < NUM_HIDDEN_LAYERS; layer++)
 {
-    hiddenParams[layer] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-        hiddenActivated[layer - 1], gMLPParams, weightOffsets[layer], biasOffsets[layer], 
-        MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    hiddenParams[layer] = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
+        hiddenActivated[layer - 1], gMLPParams, weightOffsets[layer], biasOffsets[layer]);
     hiddenActivated[layer] = rtxns::leakyReLU(hiddenParams[layer], RELU_LEAK);
 }
 
 // Hidden layer to output layer, then apply final activation function    
-outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
+outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
     hiddenActivated[NUM_HIDDEN_LAYERS - 1], gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS],
-    biasOffsets[NUM_HIDDEN_LAYERS], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    biasOffsets[NUM_HIDDEN_LAYERS]);
 outputActivated = rtxns::sigmoid(outputParams);
 ```
 
@@ -329,30 +332,30 @@ CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> lossGradientCV = CoopVec<VECTOR_FORMAT, O
 To compute the back propagation, we need to call derivative implementations of the activation functions and a backward version of the linear regression. These have been implemented in the `rtxns` namespace and can be easily extended. This will propagate the loss gradient back through the network. 
 
 ```
-// Back-propogation pass, generate the gradients and accumulate the results into memory to be applied in the optimization pass.
+// Backpropagation pass: generate gradients and accumulate them for the optimization pass.
 CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputGradient;
 CoopVec<VECTOR_FORMAT, HIDDEN_NEURONS> hiddenGradient;
 
 // Output layer (loss gradient) to final hidden layer
 outputGradient = rtxns::sigmoid_Backward(outputParams, lossGradientCV);
-hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
+hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
    hiddenActivated[NUM_HIDDEN_LAYERS - 1], outputGradient, gMLPParams, gMLPParamsGradients, 
-   weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+   weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS]);
 
 // Hidden layer to hidden layer 
 for(int layer = NUM_HIDDEN_LAYERS - 1; layer >= 1; layer--)
 {
     hiddenGradient = rtxns::leakyReLU_Backward(hiddenParams[layer], RELU_LEAK, hiddenGradient);
-    hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>
+    hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>
         (hiddenActivated[layer - 1], hiddenGradient, gMLPParams, gMLPParamsGradients, 
-        weightOffsets[layer], biasOffsets[layer], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+        weightOffsets[layer], biasOffsets[layer]);
 }
 
 // First hidden layer to input layer
 hiddenGradient = rtxns::leakyReLU_Backward(hiddenParams[0], RELU_LEAK, hiddenGradient);
-rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
+rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
     inputParams, hiddenGradient, gMLPParams, gMLPParamsGradients, weightOffsets[0], 
-    biasOffsets[0], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    biasOffsets[0]);
 ```
 
 The output of the back propagation pass will be updated gradients per weight stored in `gMLPParamsGradients`.
@@ -369,7 +372,7 @@ gLossBuffer[dispatchThreadIdxy] = dot(diff, diff);
 
 ### Optimizer
 
-As seen in the training loop, the optimizer is executed after a single training batch. The purpose of the optimizer is to perform the gradient descent to find the minima of the training model, which in real terms means it adjusts each neurons weight (and bias) in the model by a small amount of its gradient (`gMLPParamsGradients`) to try and find the best value for that neuron. In this example, we have implemented the [Adam](https://arxiv.org/pdf/1412.6980) optimizer.
+As shown in the training loop, the optimizer executes after every training batch. It applies gradient descent by adjusting each neuron's weight and bias using its accumulated gradient in `gMLPParamsGradients`. This example uses the [Adam](https://arxiv.org/pdf/1412.6980) optimizer.
 
 ```
 void adam_cs(uint3 dispatchThreadID: SV_DispatchThreadID)
@@ -417,19 +420,19 @@ CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputParams;
 
 // Forward propagation through the neural network
 // Input to hidden layer, then apply activation function
-hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
 hiddenParams = rtxns::leakyReLU(hiddenParams, RELU_LEAK);
 
 // Hidden layers to hidden layers, then apply activation function 
 [ForceUnroll]
 for (uint layer = 1; layer < NUM_HIDDEN_LAYERS; layer++)
 {
-    hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(hiddenParams, gMLPParams, weightOffsets[layer], biasOffsets[layer], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+    hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(hiddenParams, gMLPParams, weightOffsets[layer], biasOffsets[layer]);
     hiddenParams = rtxns::leakyReLU(hiddenParams, RELU_LEAK);
 }
 
 // Hidden layer to output layer, then apply final activation function
-outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(hiddenParams, gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS], MATRIX_LAYOUT, TYPE_INTERPRETATION);
+outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(hiddenParams, gMLPParams, weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS]);
 outputParams = rtxns::sigmoid(outputParams);
 
 // Take the output from the neural network as the output color

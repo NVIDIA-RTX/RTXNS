@@ -102,7 +102,7 @@ while app.process_events():
                   _result = loss_output)
 
     # Blit tensor to screen.
-    app.blit(loss_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), tonemap=False)
+    app.blit(loss_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), bilinear=True, tonemap=False)
     offset += 512 + 10
 
     # Present the window.

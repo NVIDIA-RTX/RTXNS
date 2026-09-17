@@ -16,9 +16,9 @@ It is outside the scope of this document to discuss how AI training and optimiza
 
 ## Extracting the Key Features for Training Input
 
-When implementing the Disney BRDF for use in the [Shader Training](ShaderTraining.md) example, the first task was feature extraction. Which features from the shader should be inferred from the network and which should be calculated to ensure the network is not over specialized or overly complex. The network for the Disney BRDF takes inputs such as the `view`, `light` and `normal` vectors as well as  `material roughness`. Other variables, such as `light intensity`, `material metallicness` and various `material color` components have been left as part of the shader. This is a balancing act which may require some experimentation.
+When implementing the Disney BRDF for the [Shader Training](ShaderTraining.md) example, the first task was feature extraction: deciding which shader features the network should infer and which should remain explicit calculations so that the network is neither overspecialized nor unnecessarily complex. The Disney BRDF network derives inputs from the `view`, `light`, and `normal` vectors, together with `material roughness`. Variables such as `light intensity`, `material metallicness`, and material-color components remain in the shader. Finding the right balance may require experimentation.
 
-Once the key features are identified as potential training inputs, look to optimize them where possible by reducing their form and scaling them to be in the range `0-1` or `-1 - 1` which is preferred by networks. In the Disney BRDF, this was done by recognizing that the input vectors where always normalized and used in their dot product form, so the inputs were reduced from 3 `float3` vectors, to 4 `float` dot products.
+Once the key features are identified, simplify them where possible and scale them to `[0, 1]` or `[-1, 1]`. In the Disney BRDF, the input vectors are normalized and used only through dot products, so three `float3` vectors are reduced to four scalar dot products.
 
 Next, the network inputs may benefit from encoding which research has shown to improve the performance of the network. The library provides 2 encoders, `EncodeFrequency` and `EncodeTriangle` which encode the inputs into some form of wave function. The shader training example uses the frequency encoder which increases the number of inputs by a factor of 6 but provides a better network as a result. You should experiment with encoders to find the one suitable for your dataset.
 
@@ -42,7 +42,7 @@ The following parameters are available for experimentation and should be modifie
 
 - `LEARNING_RATE` - This should be tuned to improve convergence of your model.
   
-In future versions of the library, precision of the neurons may be alterable which could change the quality and performance of the network. The current version is fixed to `float16`.
+Precision affects both quality and performance. The Shader Training sample is configured for `float16`; changing precision requires updating the matching C++ network architecture, buffer formats, and Slang types.
 
 Changing any of these parameters should not require any further code changes as the defines are shared amongst the C++ and shader code; they will just require a re-compile.  The exception may be when changing the size of input/output `CoopVecs`  and any code that dereferences their elements directly, such as :
 
@@ -54,7 +54,7 @@ As always, experimentation will be required to find the right set of configurati
 
 ## Modifying the Activation and Loss Functions
 
-The Simple Shading example uses the `TrainingMLP` which abstracts much of the training shader code for the user :
+The Shader Training example uses `TrainingMLP`, which abstracts much of the training shader code for the user:
 
 ```
 var model = rtxns::mlp::TrainingMLP<half, 
@@ -71,19 +71,19 @@ var finalActivation = rtxns::mlp::ExponentialAct<half, OUTPUT_NEURONS>();
 var outputParams = model.forward(inputParams, hiddenActivation, finalActivation);
 ```
 
-The activation functions are passed into the models forward and backward pass (`ReLUAct` and `ExponentialAct`) for use with the `TrainingMLP` and `InferenceMLP`. These can be found in [CooperativeVectorFunctions.slang](../src/NeuralShading_Shaders/CooperativeVectorFunctions.slang) and extended as necessary. The current version of RTXNS provides a limited set of activation functions, but these can be examined and modified to support more activation functions as required.
+The activation functions are passed into the model's forward and backward passes (`ReLUAct` and `ExponentialAct`) for use with `TrainingMLP` and `InferenceMLP`. They are defined in [Activation.slang](../src/NeuralShading_Shaders/Activation.slang) and can be extended as necessary.
 
-The choice of loss function to use will be dependent on your dataset. The Simple Training example uses a simple L2 loss function whereas the Shader Training example uses a more complex L2 relative loss function. Any loss function can be trivially coded in slang to help tune your shader.
+The choice of loss function depends on your dataset. The Simple Training example uses an L2 loss function, whereas the Shader Training example uses a more complex relative L2 loss. Custom loss functions can be implemented in Slang to help tune a shader.
 
-## Hyper Parameters
+## Hyperparameters
 
-These are some of the hyper parameters that are available for tuning for your dataset.
+These are some of the hyperparameters available for tuning a dataset.
 
 | Parameter                   | Value            |
 | --------------------------- | ---------------- |
 | HIDDEN_NEURONS              | 32               |
 | NUM_HIDDEN_LAYERS           | 3                |
-| LEARNING_RATE               | 1e-2f            |
+| LEARNING_RATE               | 1e-3f            |
 | BATCH_SIZE                  | (1 << 16)        |
 | BATCH_COUNT                 | 100              |
 | Hidden Activation Functions | ReLUAct()        |

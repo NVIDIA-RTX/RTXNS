@@ -7,7 +7,7 @@ This sample demonstrates how to run neural network inference in Python using the
 1. **Prototyping**: Start in Python with SlangPy for flexibility and rapid iteration.
 2. **Deployment**: Move the same Slang code to a C++ application for production use.
 
-By maintaining consistent Slang source code between both implementations, you can leverage Python's rapid development while achieving C++ performance in your final application. This approach minimizes code duplication and ensures consistent behavior across language boundaries.
+By maintaining equivalent Slang implementations across both versions, you can leverage Python's rapid development while achieving C++ performance in your final application. The sample keeps the Python-facing and C++-facing shader entry points in separate files because their resource bindings differ.
 
 The sample includes both Python and C++ implementations that perform the same neural network inference task, providing a clear path for transitioning between the two environments.
 
@@ -47,7 +47,7 @@ pip install -r samples/SlangpyInferencing/requirements.txt
 
 In the root folder, run:
 ```sh
-python samples\SlangpyInferencing\SlangpyInferencing.py
+python samples/SlangpyInferencing/SlangpyInferencing.py
 ```
 This launches the SlangPy sample, showing the original picture, inferred picture, and amplified error image.
 
@@ -157,22 +157,25 @@ while app.process_events():
 
 The C++ implementation is designed for optimal performance in production. While SlangPy is excellent for prototyping, C++ provides the performance needed for real-time applications.
 
-The C++ version uses the `donut` graphics engine and reuses the same Slang source code as the Python version.
+The C++ version uses the `donut` graphics engine. `SlangpyInferencing_pyslang.slang` and `SlangpyInferencing_cpp.slang` contain equivalent network logic with bindings appropriate to each host environment.
 
 <img src="slangpy_inferencing_steps_cpp.png" width="600" alt="C++ Inferencing Steps">
 
 ### Adding Slang to the Build System
 
-In Python, SlangPy loads and compiles Slang code. In C++, use the `slangc` compiler to produce binaries for DX12 and Vulkan.
+In Python, SlangPy loads and compiles Slang code. The C++ build uses Donut's ShaderMake integration, which invokes Slang to produce binaries for DX12 and Vulkan.
 
 Integrate Slang compilation into your build system:
 
 ```cmake
-include(../../external/donut/compileshaders.cmake)
+include(compileshaders)
 
-set(SHADER_COMPILE_OPTIONS "--matrixRowMajor --hlsl2021" )
-set(SHADER_COMPILE_OPTIONS_SPIRV " -X \"-Wno-41017 -capability spvCooperativeVectorNV -capability spvCooperativeVectorTrainingNV\" " )
-set(SHADER_COMPILE_OPTIONS_DXIL " --shaderModel 6_9 --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -Vd\" " )
+set(project SlangpyInferencing)
+set(folder "Samples/SlangpyInferencing")
+set(shader_includes
+    ${NS_SAMPLE_SHADER_INCLUDES_COMMON}
+    ${CMAKE_CURRENT_LIST_DIR}
+)
 
 file(GLOB_RECURSE ${project}_shaders "*.hlsl" "*.hlsli" "*.slang")
 
@@ -181,10 +184,11 @@ donut_compile_shaders_all_platforms(
     CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/shaders.cfg
     INCLUDES ${shader_includes}
     FOLDER ${folder}
-    OUTPUT_BASE ${RTXNS_BINARY_DIR}/shaders/${project}
-    SHADERMAKE_OPTIONS ${SHADER_COMPILE_OPTIONS}
-    SHADERMAKE_OPTIONS_SPIRV ${SHADER_COMPILE_OPTIONS_SPIRV}
-    SHADERMAKE_OPTIONS_DXIL ${SHADER_COMPILE_OPTIONS_DXIL}
+    OUTPUT_BASE ${RTXNS_OUTPUT_DIR}/shaders/${project}
+    SHADERMAKE_OPTIONS ${NS_SAMPLE_SHADER_COMPILE_OPTIONS}
+    SHADERMAKE_OPTIONS_SPIRV ${NS_SAMPLE_SHADER_COMPILE_OPTIONS_SPIRV}
+    SHADERMAKE_OPTIONS_DXIL ${NS_SAMPLE_SHADER_COMPILE_OPTIONS_DXIL}
+    SHADER_MODEL ${NS_SAMPLE_SHADER_MODEL}
     SOURCES ${${project}_shaders}
     SLANG
 )
@@ -201,7 +205,7 @@ To use cooperative vector operations, you must enable the appropriate features f
 
 #### DirectX 12
 
-Enable experimental shader models before device creation. With the DirectX 12 Agility preview SDK (Linear Algebra / cooperative vectors), the runtime does not expose a separate `D3D12CooperativeVectorExperiment` UUID in current DirectX-Headers; the RTXNS samples call `D3D12EnableExperimentalFeatures` with shader models only:
+Enable experimental shader models before device creation. The RTXNS samples call `D3D12EnableExperimentalFeatures` with the shader-model feature:
 
 ```c++
 UUID features[] = { D3D12ExperimentalShaderModels };
@@ -251,7 +255,7 @@ paramsBufferDesc.keepInitialState = true;
 m_mlpHostBuffer = GetDevice()->createBuffer(paramsBufferDesc);
 
 paramsBufferDesc.structStride = sizeof(uint16_t);
-paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkSize;
+paramsBufferDesc.byteSize = m_deviceNetworkLayout.networkByteSize;
 paramsBufferDesc.canHaveRawViews = true;
 paramsBufferDesc.canHaveUAVs = true;
 paramsBufferDesc.canHaveTypedViews = true;

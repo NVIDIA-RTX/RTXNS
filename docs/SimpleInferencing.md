@@ -24,12 +24,12 @@ On the host, the setup and running of the neural network is quite simple and use
 
 ### Network Creation
 
-A `rtxns::Network` is created and initialized from a file. To ensure platform portability, the network should be stored in a non GPU-optimized format, such as `rtxns::MatrixLayout::RowMajor` and then later converted to a GPU optimized layout on the device, as shown in the following code.
+A `rtxns::HostNetwork` is created and initialized from a file. To ensure platform portability, the network should be stored in a non-GPU-optimized format, such as `rtxns::MatrixLayout::RowMajor`, and later converted to a GPU-optimized layout on the device, as shown below.
 
 ```
- m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
+m_networkUtils = std::make_shared<rtxns::NetworkUtilities>(GetDevice());
 rtxns::HostNetwork hostNetwork(m_networkUtils);
-if (!net.initializeFromFile(GetLocalPath("assets/data").string() + std::string("/disney.ns.bin")))
+if (!hostNetwork.InitialiseFromFile(GetLocalPath("assets/data").string() + std::string("/disney.ns.bin")))
 {
     log::debug("Loaded Neural Shading Network from file failed.");
     return false;
@@ -46,7 +46,7 @@ This will load the network definition and parameters from the file, allocate a c
 #### Float16 Parameter Buffer
 Two parameter buffers are required, the first for the host layout and the second for device optimal layout. The parameter buffers contains all of the weights and biases for the network stored at a suitable precision, such as float16.
 
-Once the host layout buffer is populated we can convert to the device layout. This will be used directly in the inferencing shaders as input to the Slang CoopVector functions.
+Once the host-layout buffer is populated, it can be converted to the device layout. The inference shaders use this buffer directly as input to Slang cooperative-vector functions.
 
 ```
 // Create a buffer for the host side weight and bias parameters
@@ -58,7 +58,7 @@ bufferDesc.keepInitialState = true;
 m_mlpHostBuffer = GetDevice()->createBuffer(bufferDesc);
 
 // Create a buffer for a device optimized parameters layout
-bufferDesc.byteSize = deviceNetworkLayout.networkSize;
+bufferDesc.byteSize = deviceNetworkLayout.networkByteSize;
 bufferDesc.canHaveRawViews = true;
 bufferDesc.canHaveUAVs = true;
 bufferDesc.debugName = "deviceParamBuffer";
@@ -66,6 +66,7 @@ bufferDesc.initialState = nvrhi::ResourceStates::UnorderedAccess;
 m_mlpDeviceBuffer = GetDevice()->createBuffer(bufferDesc);
 
  // Upload the parameters
+const auto& params = hostNetwork.GetNetworkParams();
 m_commandList->writeBuffer(m_mlpHostBuffer, params.data(), params.size());
 
 // Convert to GPU optimized layout
@@ -136,7 +137,7 @@ The Disney BRDF model used in this example encodes the inputs into the 0-1 frequ
 
 ### Inference Shader
 
-The inference shader uses the native slang `CoopVec` class. This is used to map the neural network weights and biases to the hardware (tensor core) in a cooperative vector form. More detail on the `CoopVec` class can be found in our [Library Guide](LibraryGuide.md), but we shall perform a quick introduction here.
+The inference shader uses Slang's native `CoopVec` class to map the neural-network weights and biases to hardware in cooperative-vector form. See the [Library Guide](LibraryGuide.md) for more detail.
 
 ```
   CoopVec<VECTOR_FORMAT, INPUT_NEURONS> inputParams;
@@ -148,21 +149,23 @@ The above code declares a native CoopVec type of size `INPUT_NEURONS` using prec
   CoopVec<half, 30> inputParams;
 ```
 
-There may be implementation specific size constraints on the underlying vector size (multiples of 32), but the Slang CoopVec objects can be created with arbitrary sizes and the compiler will pad as required. Conceptually, these CoopVec objects are equivalent to pytorch tensors and each layer in the neural network will take a cooperative vector as input and produce one as output. The input/output vectors may be different sizes. 
+There may be implementation-specific constraints on the underlying vector size, but Slang `CoopVec` objects can be declared with arbitrary sizes and the compiler pads them as required. Conceptually, these objects are similar to PyTorch tensors: each neural-network layer takes a cooperative vector as input and produces one as output. The input and output vectors may have different sizes.
 
-To execute the inference model, the `rtxns` functions are used with templated parameters to perform the forward propagation of the input cooperative vectors through the network.  For instance, the `LinearOp` function shown below will perform linear regression of the `INPUT_NEURONS` to the  `OUTPUT_NEURONS` using the precision format `VECTOR_FORMAT`. This is equivalent to `torch.nn.Linear` from pytorch.
+To execute the inference model, `rtxns` functions use generic parameters to propagate cooperative vectors through the network. For example, `LinearOp` maps `INPUT_NEURONS` to `OUTPUT_NEURONS` using the `VECTOR_FORMAT` precision. This is equivalent to `torch.nn.Linear` in PyTorch.
 
 ```
-hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(...)
+hiddenParams = rtxns::LinearOp<
+    VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS,
+    CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(...)
 ```
 
-The `LinearOp` function is a convenience wrapper located in [LinearOps.slang](../src/NeuralShading_Shaders/LinearOps.slang), built upon the native `CoopVec` interface to performs a simple matrix multiply add. The underlying function is shown below:
+The `LinearOp` function is a convenience wrapper in [LinearOps.slang](../src/NeuralShading_Shaders/LinearOps.slang), built on the native `CoopVec` interface to perform a matrix multiply-add. The underlying function is shown below:
 
 ```
 coopVecMatMulAdd<Type, Size>(...)
 ```
 
-Following the linear regression, an activation function is typically called. In this example. we use `relu`  from the `rtxns` namespace located in [CooperativeVectorFunctions.slang](../src/NeuralShading_Shaders/CooperativeVectorFunctions.slang).
+An activation function normally follows the linear operation. This example uses `relu` from the `rtxns` namespace in [CooperativeVectorFunctions.slang](../src/NeuralShading_Shaders/CooperativeVectorFunctions.slang).
 
 ```
 hiddenParams = rtxns::relu(hiddenParams);
@@ -181,23 +184,23 @@ inputParams = rtxns::EncodeFrequency<half, INPUT_FEATURES>(params);
 
 // Forward propagation through the neural network
 // Input to hidden layer, then apply activation function
-hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-    inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+    inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
 hiddenParams = rtxns::relu(hiddenParams);
 
 // Hidden layer to hidden layer, then apply activation function 
-hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-    hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+    hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1]);
 hiddenParams = rtxns::relu(hiddenParams);
 
 // Hidden layer to hidden layer, then apply activation function    
-hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-    hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+    hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2]);
 hiddenParams = rtxns::relu(hiddenParams);
 
 // Hidden layer to output layer, then apply final activation function
-outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
-    hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+    hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3]);
 outputParams = exp(outputParams);
 
 // Take the output from the neural network as the output color
@@ -236,23 +239,23 @@ float4 DisneyMLP(float NdotL, float NdotV, float NdotH, float LdotH, float rough
    
    // Forward propagation through the neural network
    // Input to hidden layer, then apply activation function
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS>(
-       inputParams, gMLPParams, weightOffsets[0], biasOffsets[0], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       inputParams, gMLPParams, weightOffsets[0], biasOffsets[0]);
    hiddenParams = rtxns::relu(hiddenParams);
    
    // Hidden layer to hidden layer, then apply activation function 
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[1], biasOffsets[1]);
    hiddenParams = rtxns::relu(hiddenParams);
    
    // Hidden layer to hidden layer, then apply activation function    
-   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   hiddenParams = rtxns::LinearOp<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[2], biasOffsets[2]);
    hiddenParams = rtxns::relu(hiddenParams);
    
    // Hidden layer to output layer, then apply final activation function
-   outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS>(
-       hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3], CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION);
+   outputParams = rtxns::LinearOp<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, CoopVecMatrixLayout::InferencingOptimal, TYPE_INTERPRETATION>(
+       hiddenParams, gMLPParams, weightOffsets[3], biasOffsets[3]);
    outputParams = exp(outputParams);
 
     // Take the output from the neural network as the output color

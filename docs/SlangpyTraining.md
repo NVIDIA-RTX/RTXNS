@@ -16,7 +16,7 @@ It's almost impossible to know ahead of time which kind of network will perform 
 
 We used a predetermined network architecture in each of the previous samples for simplicity, and this can work well if you already know the network is a good match to your problem. However, when that's not the case, doing model exploration in the previous samples can be inconvenient, as it requires changes to multiple files and recompilation each time.
 
-Popular machine learning frameworks such as `pytorch` or `jax` are designed to make this kind of exploration easy. Unfortunately however, these frameworks are geared more towards large networks, and using them for the small networks we explore here entails a large performance penalty compared to training with RTXNS. We'll show an alternative approach that uses the building blocks of RTXNS, but applies them in a modular way in Python similar to `pytorch`.
+Popular machine-learning frameworks such as PyTorch or JAX are designed to make this kind of exploration easy. However, these frameworks are geared more toward large networks, and using them for the small networks explored here can impose a large performance penalty compared with RTXNS training. This sample applies the RTXNS building blocks in a modular Python workflow similar to PyTorch.
 
 ## Setup steps
 
@@ -38,7 +38,7 @@ will install the necessary requirements.
 
 In the root folder, the following command
 ```
-python samples\SlangpyTraining\SlangpyTraining.py
+python samples/SlangpyTraining/SlangpyTraining.py
 ```
 will launch the SlangPy sample. This will pop up a window that trains four different network architectures, one after the other. The model fit is displayed at the top, and an amplified error image between the reference and the fit is shown at the bottom.
 
@@ -56,12 +56,12 @@ sample = SDKSample(sys.argv[1:])
 device = sample.device
 ```
 
-From there, the next step is to load a slang module:
+The next step is to load a Slang module:
 ```
 module = Module.load_from_file(device, "SlangpyTraining.slang")
 ```
 
-This returns a `Module` that contains all the types and functions from the slang module.
+This returns a `Module` containing all the types and functions from the Slang module.
 
 ### Simple function calls
 
@@ -99,7 +99,7 @@ SlangPy comes with a handful of builtin types to make working with calls easier.
 
 ### Passing structs
 
-Slang structs can be passed as a Python dictionary. For example, the following slang function:
+Slang structs can be passed as Python dictionaries. For example, the following Slang function:
 ```
 struct Color { float red; float green; float blue; }
 void processColor(Color c) { /* ... */ }
@@ -119,13 +119,13 @@ class Color:
 c = Color( .... )
 module.processColor(c)
 ```
-When encountering a Python object with a `get_this` method, SlangPy will call it to unpack the object and then translate it to slang. The name of the Python class is not important; just that the dictionary fields match the Slang struct.
+When encountering a Python object with a `get_this` method, SlangPy calls it to unpack the object and translate it to Slang. The Python class name is unimportant; its dictionary fields only need to match the Slang struct.
 
 ## Architecture overview
 
-In order to try out different networks, we need a way to run the building blocks of the RTXNS slang library without manually writing the training and inferencing code.
+To try different networks, the sample needs a way to run the RTXNS Slang building blocks without manually writing training and inference code.
 
-The main idea is very similar to how frameworks like `pytorch` work. First, we take the components of RTXNS and make them conform to a shared interface (in torch, this would be `torch.nn.Module`) with a differentiable `forward` method. Then, we provide ways to combine and mix those modules together to build powerful architectures (the equivalent of `torch.nn.Sequential`).
+The approach is similar to PyTorch. RTXNS components conform to a shared interface—analogous to `torch.nn.Module`—with a differentiable `forward` method. Those modules can then be combined into architectures analogous to `torch.nn.Sequential`.
 
 To achieve this, this sample adds a small wrapper around RTXNS in `NeuralModules.slang`. First, it introduces a new interface:
 ```
@@ -181,7 +181,7 @@ This function follows the same pattern as the [Simple Training](SimpleTraining.m
 - Compute the gradient of the loss comparing them with `Loss.deriv(targetRGB, predictedRGB, lossScale);`
 - Backpropagate the gradient with `bwd_diff(EvalModel)`.
 
-Compared to the previous sample, this condenses the function quite a bit, and it is now reusable: We can pass in any model that takes 2 inputs and produces 3 outputs, and we can rely on slang to generate the correct inference and gradient code.
+Compared with the previous sample, this version is concise and reusable: any model that takes two inputs and produces three outputs can be supplied, and Slang generates the corresponding inference and gradient code.
 
 ### Neural Model implementations
 
@@ -204,7 +204,7 @@ In its `forward` method, this calls directly to the `rtxns::EncodeFrequencyN` fu
 
 We will explain the other implementations in more detail at the end of this document, but most importantly we have a `TrainableMLPModule` that has the same parameters as the `TrainingMLP`, with the addition of activations, and a `ModuleChain` that chains multiple modules together, and feeds the output of one to the next.
 
-### Neural Modules in python
+### Neural Modules in Python
 
 `NeuralModules.slang` now lets us write arbitrary network architectures without writing any code. Instead, we can declare the whole network as a single type by combining the classes above.
 
@@ -220,7 +220,7 @@ rtxns::ModuleChain<half, 2, 12, 3,
 ```
 This gets a bit tedious. However, we don't have to declare this type by hand - Python can do this for us.
 
-`NeuralModules.py` defines many of the same types as `NeuralModules.slang`, with `CoopVecModule` as the root type. The name was chosen deliberately to avoid confusion with the SlangPy `Module` or the pytorch `Module`. It defines a few useful abstract functions:
+`NeuralModules.py` defines many of the same types as `NeuralModules.slang`, with `CoopVecModule` as the root type. The name avoids confusion with the SlangPy `Module` or PyTorch's `Module`. It defines a few useful abstract functions:
 - `@property type_name`: Returns a string corresponding to the slang type this module represents
 - `get_this()`: Returns a dictionary with the module fields. This way, a `CoopVecModule` instance can be passed directly to Slang. 
 - `parameters()`, `gradients()`: A list of parameter buffers and their gradients that will be used/produced in forward/backward, respectively
@@ -239,7 +239,7 @@ mlp_with_encoding = ModuleChain(
                     output_act=SigmoidAct())
 )
 ```
-This does a few things: Instantiating `TrainableMLP` creates the CoopVector buffers to store the weight/bias parameters and gradients. These can be found via `mlp_with_encoding.parameters()` and `.gradients()`, respectively. Second, we now have the type name of the model. Third, thanks to `get_this()`, we can pass `mlp_with_encoding` directly to slang functions expecting an `IModule`.
+This does a few things. Instantiating `TrainableMLP` creates the cooperative-vector buffers that store weight and bias parameters and gradients; these are available through `mlp_with_encoding.parameters()` and `.gradients()`, respectively. It also provides the model's type name. Finally, `get_this()` allows `mlp_with_encoding` to be passed directly to Slang functions expecting an `IModule`.
 
 For example, calling `EvalModel` can be done with
 ```
@@ -247,7 +247,7 @@ module[f"EvalModel<{mlp_with_encoding.type_name}>"](mlp_with_encoding, ....)
 ```
 Because `EvalModel` is generic, we need to specialize it with the generic arguments first before we can call it with SlangPy. We can do this by building the function name as a string and looking it up in the Slang module with `[]`.
 
-The model architecture and its parameters are now all defined in one place: We just need to change how we construct `mlp_with_encoding`, and all the slang code needed to train it will automatically work with it. We can pass the Python object `mlp_with_encoding` directly and can rely on all the correct buffers being passed, even when we change the network architecture.
+The model architecture and parameters are now defined in one place. Changing the construction of `mlp_with_encoding` updates the Slang code used to train it, while the Python object continues to supply the correct buffers even when the architecture changes.
 
 And all this without recompiling!
 

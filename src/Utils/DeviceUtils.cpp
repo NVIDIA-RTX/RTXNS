@@ -155,12 +155,7 @@ void SetCoopVectorExtensionParameters(donut::app::DeviceCreationParameters& devi
 #if DONUT_WITH_DX12
     if (graphicsApi == nvrhi::GraphicsAPI::D3D12)
     {
-        UUID Features[] = {
-            D3D12ExperimentalShaderModels,
-#if D3D12_PREVIEW_SDK_VERSION == 717
-            D3D12CooperativeVectorExperiment,
-#endif
-        };
+        UUID Features[] = { D3D12ExperimentalShaderModels };
         HRESULT hr = D3D12EnableExperimentalFeatures(_countof(Features), Features, nullptr, nullptr);
 
         if (FAILED(hr))

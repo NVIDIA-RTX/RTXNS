@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This sample extends on the techniques shown in the [Simple Training](SimpleTraining.md) example and introduces Slangs AutoDiff functionality, via a full MLP (Multi Layered Perceptron) abstraction. The MLP is implemented using the `CoopVector` training code previously introduced and provides a simple interface for training networks with Slang. The sample creates a network and trains a model on the Disney BRDF shader that was used in the [Simple Inferencing](SimpleInferencing.md) sample. 
+This sample extends the techniques shown in the [Simple Training](SimpleTraining.md) example and introduces Slang's AutoDiff functionality through a full multilayer perceptron (MLP) abstraction. The MLP uses the `CoopVec` training code introduced previously and provides a simple interface for training networks with Slang. The sample creates a network and trains a model on the Disney BRDF shader used in the [Simple Inferencing](SimpleInferencing.md) sample.
 
 ![Shader Training Output](shader_training.png)
 
@@ -43,10 +43,10 @@ On the host, the setup of the neural network is quite simple and broadly similar
 
 ### Training Loop
 
-After creating the appropriate pipelines and allocating the GPU buffers, the training loop is similar to the Simple Training example. The training and optimization passes are executed multiple times per frame (`g_trainingStepsPerFrame = 100`) to speed up the training time whilst also running the inference pass at a reasonable rate to see the model convergence. 
+After creating the appropriate pipelines and allocating the GPU buffers, the training loop is similar to the Simple Training example. The training and optimization passes execute `BATCH_COUNT` times per frame (`100` in `NetworkConfig.h`) to speed up training while still rendering often enough to show convergence.
 
 ```
-for (int i = 0; i < g_trainingStepsPerFrame; ++i)
+for (int i = 0; i < BATCH_COUNT; ++i)
 {
     nvrhi::ComputeState state;
     ...
@@ -55,14 +55,14 @@ for (int i = 0; i < g_trainingStepsPerFrame; ++i)
     state.pipeline = m_trainingPass.pipeline;
     ...
     m_commandList->setComputeState(state);
-    m_commandList->dispatch(m_batchSize / 64, 1, 1);
+    m_commandList->dispatch(m_batchSize / THREADS_PER_GROUP_TRAIN, 1, 1);
     ...
     // Optimizer pass
     state.bindings = { m_optimizerPass.bindingSet };
     state.pipeline = m_optimizerPass.pipeline;
     ...
     m_commandList->setComputeState(state);
-    m_commandList->dispatch(div_ceil(m_totalParameterCount, 32), 1, 1);
+    m_commandList->dispatch(div_ceil(m_totalParameterCount, THREADS_PER_GROUP_OPTIMIZE), 1, 1);
     ...
 }
 ```
@@ -79,7 +79,7 @@ The neural network in this sample is trying to encode the following :
 Disney(NdotL, NdotV, NdotH, LdotH, roughness);
 ```
 
-The shader code extends the concepts shown in the [Simple Training](SimpleTraining.md) example by using Slangs [AutoDiff](https://shader-slang.org/slang/user-guide/autodiff.html) feature to create a templated training class `TrainingMLP`, implemented in [MLP.slang](../src/NeuralShading_Shaders/MLP.slang), that can be used to help train your own models. Using the Autodiff features means we don't need to implement a full backwards pass containing all of the derivative activation functions as it is automatically derived for you.
+The shader code extends the concepts shown in the [Simple Training](SimpleTraining.md) example by using Slang's [AutoDiff](https://shader-slang.com/slang/user-guide/autodiff.html) feature to create a templated training class, `TrainingMLP`, implemented in [MLP.slang](../src/NeuralShading_Shaders/MLP.slang). AutoDiff means that a full backward pass containing manually implemented activation derivatives is not required.
 
 The main 3 shaders are: [training](../samples/ShaderTraining/computeTraining.slang), [optimizer](../samples/ShaderTraining/computeOptimizer.slang) and [inference](../samples/ShaderTraining/renderInference.slang).
 
@@ -135,7 +135,10 @@ To generate the loss gradient, this example uses the `L2Relative` derivative fun
 ```
 float4 predictedDisney = { outputParams[0], outputParams[1], outputParams[2], outputParams[3] };
 
-float4 lossGradient = rtxns::mlp::L2Relative<float, 4>.deriv(actualDisney, predictedDisney, float4(LOSS_SCALE / (gConst.batchSize * 4)) * COMPONENT_WEIGHTS);
+float4 lossGradient = rtxns::mlp::LossDerivFromVector<4, rtxns::mlp::L2Relative<float, 4>>(
+    actualDisney,
+    predictedDisney,
+    float4(LOSS_SCALE / (gConst.batchSize * 4)) * COMPONENT_WEIGHTS);
 ```
 
 Finally, the loss gradient along with the input vector are passed through the models backward propagation function to update the gradient parameters.

@@ -7,7 +7,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.24)
 
 project(
     RtxNeuralShading
@@ -22,7 +22,30 @@ set(CMAKE_CXX_EXTENSIONS ON)
 option(ENABLE_DX12_COOP_VECTOR_PREVIEW "" OFF)
 option(DONUT_WITH_DX11 "Not supported in this SDK" OFF)
 option(DONUT_WITH_DX12 "DX12 is only supported with DX12_COOP_VECTOR_PREVIEW ON" OFF)
-option(DONUT_WITH_VULKAN "" ON)
+
+# Vulkan support requires the Vulkan SDK (see README): its DXC is the compiler for the SPIR-V shaders.
+# Without the SDK, the Vulkan backend and the SPIR-V shaders are not built rather than compiling
+# SPIR-V with whichever dxc happens to be found (the Windows SDK ships a dxc.exe without SPIR-V code
+# generation). The SDK is detected from the VULKAN_SDK environment variable set by its installer, or
+# from system-wide headers on Linux. Pass -DDONUT_WITH_VULKAN=OFF to build without Vulkan even when
+# the SDK is installed; turning it ON without the SDK is a configuration error.
+find_path(RTXNS_VULKAN_SDK_INCLUDE_DIR NAMES vulkan/vulkan.h HINTS ENV VULKAN_SDK PATH_SUFFIXES Include include
+	DOC "Vulkan SDK include directory; used to detect whether the Vulkan SDK is installed")
+mark_as_advanced(RTXNS_VULKAN_SDK_INCLUDE_DIR)
+if(RTXNS_VULKAN_SDK_INCLUDE_DIR)
+	set(_rtxns_vulkan_default ON)
+else()
+	set(_rtxns_vulkan_default OFF)
+endif()
+option(DONUT_WITH_VULKAN "Build the Vulkan version of the samples and their SPIR-V shaders (requires the Vulkan SDK)" ${_rtxns_vulkan_default})
+if(DONUT_WITH_VULKAN AND RTXNS_VULKAN_SDK_INCLUDE_DIR)
+	message(STATUS "RTXNS: Vulkan SDK found (${RTXNS_VULKAN_SDK_INCLUDE_DIR}); the Vulkan backend and SPIR-V shaders are enabled")
+elseif(DONUT_WITH_VULKAN)
+	message(FATAL_ERROR "RTXNS: DONUT_WITH_VULKAN is ON but the Vulkan SDK was not found (VULKAN_SDK is not set). "
+		"Install the Vulkan SDK (see README) and re-run CMake, or configure with -DDONUT_WITH_VULKAN=OFF.")
+else()
+	message(STATUS "RTXNS: Vulkan SDK not found (VULKAN_SDK is not set); the Vulkan backend and SPIR-V shaders are disabled. Install the Vulkan SDK to enable them. After installing it, configure in a fresh build directory or remove RTXNS_VULKAN_SDK_INCLUDE_DIR and DONUT_WITH_VULKAN from the CMake cache so they are detected again.")
+endif()
 option(DONUT_WITH_STATIC_SHADERS "" ON)
 
 set(DONUT_DIR "${CMAKE_SOURCE_DIR}/external/donut"
@@ -32,6 +55,11 @@ list(APPEND CMAKE_MODULE_PATH "${DONUT_DIR}")
 # Register our path for CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/support/cmake")
 
+# Detect the target and host CPU architectures (RTXNS_TARGET_ARCH / RTXNS_HOST_ARCH). These select
+# the architecture-specific packages fetched below: NVAPI and Agility SDK binaries follow the target,
+# the DXC and Slang compilers follow the host they run on.
+include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/TargetArch.cmake")
+
 if (MSVC)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=1")
 endif()
@@ -39,46 +67,49 @@ endif()
 option(DONUT_WITH_ASSIMP "" OFF)
 
 if(WIN32)
-	set(RTXNS_BINARY_DIR "${CMAKE_SOURCE_DIR}/bin/windows-x64" CACHE PATH "Output directory for the RTXNS build")
+	set(RTXNS_BINARY_DIR "${CMAKE_SOURCE_DIR}/bin/windows-${RTXNS_TARGET_ARCH}" CACHE PATH "Output directory for the RTXNS build")
 else()
-	set(RTXNS_BINARY_DIR "${CMAKE_SOURCE_DIR}/bin/linux-x64" CACHE PATH "Output directory for the RTXNS build")
+	set(RTXNS_BINARY_DIR "${CMAKE_SOURCE_DIR}/bin/linux-${RTXNS_TARGET_ARCH}" CACHE PATH "Output directory for the RTXNS build")
 endif()
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${RTXNS_BINARY_DIR}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${RTXNS_BINARY_DIR}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${RTXNS_BINARY_DIR}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RTXNS_BINARY_DIR}")
-
-set(SHADERMAKE_BIN_OUTPUT_PATH "${RTXNS_BINARY_DIR}/bin" CACHE STRING "Output directory for the ShaderMake executable")
-
-# 717 is retained as a temporary compatibility path for the SM 6.9 preview driver/toolchain.
-# Prefer 721 for new development; The 717 path will be removed once support for the legacy preview driver is dropped.
-set(RTXNS_DX12_COOP_VECTOR_PREVIEW "721" CACHE STRING "DX12 Cooperative Vector preview toolchain to use (721 or 717). Requires a driver compatible with the selected preview; the same driver is not expected to support both.")
-set_property(CACHE RTXNS_DX12_COOP_VECTOR_PREVIEW PROPERTY STRINGS "721" "717")
-
-if("${RTXNS_DX12_COOP_VECTOR_PREVIEW}" STREQUAL "717")
-	set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.717.0-preview" CACHE STRING "D3D12 Agility SDK preview version used for DX12 Cooperative Vector support" FORCE)
-	set(SHADERMAKE_DXC_VERSION "v1.8.2505" CACHE STRING "DXC version override" FORCE)
-	set(SHADERMAKE_DXC_DATE "2025_05_24" CACHE STRING "DXC date override" FORCE)
-	set(SHADERMAKE_SLANG_VERSION "2025.23.1" CACHE STRING "Slang version override" FORCE)
-	set(RTXNS_DX12_SHADER_MODEL "6_9")
-elseif("${RTXNS_DX12_COOP_VECTOR_PREVIEW}" STREQUAL "721")
-	set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.721.2-preview" CACHE STRING "D3D12 Agility SDK preview version used for DX12 Cooperative Vector support" FORCE)
-	set(SHADERMAKE_DXC_VERSION "v1.10.2605.24" CACHE STRING "DXC version override" FORCE)
-	set(SHADERMAKE_DXC_DATE "preview_2026_05_22" CACHE STRING "DXC date override" FORCE)
-	set(SHADERMAKE_SLANG_VERSION "2026.10" CACHE STRING "Slang version override" FORCE)
-	set(RTXNS_DX12_SHADER_MODEL "6_10")
-else()
-	message(FATAL_ERROR "Unsupported RTXNS_DX12_COOP_VECTOR_PREVIEW='${RTXNS_DX12_COOP_VECTOR_PREVIEW}'. Expected '721' or '717'.")
+# Executables are written to a per-configuration folder, bin/<platform>/<Config>/, together with the
+# shaders and the D3D12 Agility runtime they load relative to the executable. Single-config
+# generators (Ninja, Makefiles) need CMAKE_BUILD_TYPE for that folder name.
+get_property(_rtxns_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (NOT _rtxns_multi_config AND NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
+	set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
+set(RTXNS_OUTPUT_DIR "${RTXNS_BINARY_DIR}/$<CONFIG>")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${RTXNS_OUTPUT_DIR}")
 
-# These paths are passed to FetchContent as SOURCE_DIR and are created/populated during configure.
+# ShaderMake appends the configuration itself, so this yields bin/<platform>/<Config>/ShaderMake.exe.
+# FORCE: the layout is owned by the project, so build directories configured earlier do not keep a stale value.
+set(SHADERMAKE_BIN_OUTPUT_PATH "${RTXNS_BINARY_DIR}" CACHE STRING "Output directory for the ShaderMake executable" FORCE)
+
+set(D3D_AGILITY_SDK_PREVIEW_VERSION "1.721.3-preview" CACHE STRING "D3D12 Agility SDK preview version used for DX12 Cooperative Vector support" FORCE)
+# Agility SDK 1.721.3 has no matching DirectX-Headers tag. The 1.721.2
+# headers already expose the linear algebra APIs used by this project.
+set(RTXNS_DIRECTX_HEADERS_VERSION "1.721.2-preview")
+set(SHADERMAKE_DXC_VERSION "v1.10.2605.24" CACHE STRING "DXC version override" FORCE)
+set(SHADERMAKE_DXC_DATE "preview_2026_05_22" CACHE STRING "DXC date override" FORCE)
+set(SHADERMAKE_SLANG_VERSION "2026.10" CACHE STRING "Slang version override" FORCE)
+set(RTXNS_DX12_SHADER_MODEL "6_10")
+
+# Passed to Donut's Agility SDK fetch as the extraction directory; created/populated during configure.
 set(RTXNS_D3D_AGILITY_SDK_FETCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/dx12-agility-sdk-${D3D_AGILITY_SDK_PREVIEW_VERSION}")
-set(RTXNS_DIRECTX_HEADERS_FETCH_DIR "${CMAKE_BINARY_DIR}/_deps/directx_headers-${D3D_AGILITY_SDK_PREVIEW_VERSION}")
 
-option(SHADERMAKE_FIND_SLANG "" ON)
+# Download the DXC and Slang compilers for the build host's architecture. This also turns off
+# ShaderMake's own download, which does not recognise Windows on Arm hosts.
+include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchShaderCompilers.cmake")
 
-set(DONUT_SHADERS_OUTPUT_DIR "${RTXNS_BINARY_DIR}/bin/shaders/framework")
+# When cross-compiling, build ShaderMake (which runs at build time) for the host instead of letting
+# Donut build it with the target toolchain. No-op for native builds.
+include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/HostShaderMake.cmake")
+
+# Only used when DONUT_WITH_STATIC_SHADERS is OFF; the samples load the framework shaders from
+# <executable dir>/shaders/framework/<api>, so this has to follow the per-configuration output folder.
+set(DONUT_SHADERS_OUTPUT_DIR "${RTXNS_OUTPUT_DIR}/shaders/framework")
 
 if (WIN32)
 	if (ENABLE_DX12_COOP_VECTOR_PREVIEW)
@@ -91,12 +122,23 @@ if (WIN32)
 	endif()
 endif()
 
+if(NOT DONUT_WITH_DX12 AND NOT DONUT_WITH_VULKAN)
+	message(FATAL_ERROR "RTXNS: no graphics API is enabled. Vulkan is off (the Vulkan SDK was not found, or DONUT_WITH_VULKAN=OFF) "
+		"and DX12 is off (Windows only; requires ENABLE_DX12_COOP_VECTOR_PREVIEW=ON).")
+endif()
+
 if (DONUT_WITH_DX12)
 	# Get D3D Agility SDK Preview for Coop Vector support
-	set(RTXNS_DIRECTX_HEADERS_GIT_TAG "v${D3D_AGILITY_SDK_PREVIEW_VERSION}" CACHE STRING "DirectX-Headers git tag or commit used by NVRHI" FORCE)
-	set(NVRHI_DIRECTX_HEADERS_GIT_TAG "${RTXNS_DIRECTX_HEADERS_GIT_TAG}" CACHE STRING "DirectX-Headers git tag or commit used by NVRHI" FORCE)
-	set(NVRHI_DIRECTX_HEADERS_FETCH_DIR "${RTXNS_DIRECTX_HEADERS_FETCH_DIR}" CACHE STRING "Source directory for fetched DirectX-Headers" FORCE)
-	set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${D3D_AGILITY_SDK_PREVIEW_VERSION}")
+	# The SDK is extracted into a versioned folder in the source tree that is shared by all build
+	# directories. Donut's fetch deletes and re-extracts the folder on the first configure of every
+	# new build directory, so once it is present, point Donut at the existing path instead of the URL.
+	if (EXISTS "${RTXNS_D3D_AGILITY_SDK_FETCH_DIR}/build/native/include/d3d12.h")
+		set(DONUT_D3D_AGILITY_SDK_PATH "${RTXNS_D3D_AGILITY_SDK_FETCH_DIR}")
+		unset(DONUT_D3D_AGILITY_SDK_URL)
+		message(STATUS "Agility SDK: using existing download in ${RTXNS_D3D_AGILITY_SDK_FETCH_DIR}")
+	else()
+		set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${D3D_AGILITY_SDK_PREVIEW_VERSION}")
+	endif()
 	set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "${RTXNS_D3D_AGILITY_SDK_FETCH_DIR}" CACHE STRING "" FORCE)
 	unset(_d3d_agility_include CACHE)
 	unset(DONUT_D3D_AGILITY_SDK_CORE_DLL CACHE)
@@ -107,6 +149,10 @@ if (DONUT_WITH_DX12)
 	# Get NVAPI
 	include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchNVAPI.cmake")
 endif()
+
+# Provide Vulkan-Headers and DirectX-Headers to NVRHI from tag archives shared by all build directories
+# instead of the git clones NVRHI would otherwise make in each one (see the module for details).
+include("${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchGraphicsHeaders.cmake")
 
 add_subdirectory(external/donut)
 
@@ -131,7 +177,16 @@ if (WIN32)
 	file(COPY "${DXCOMPILER_DLL}" "${DXIL_DLL}" DESTINATION "${SLANG_DIRECTORY}/")
 endif()
 
-file(WRITE "${CMAKE_SOURCE_DIR}/bin/slangc.bat" "${SHADERMAKE_SLANG_PATH} %*")
+# Convenience launcher for the Slang compiler used by the build; the SlangPy training sample
+# (samples/SlangpyTraining/Helpers.py) passes it to ShaderMake. A batch file on Windows, a shell
+# script on other hosts. It points at the shared download in external/, so it is the same for all
+# build directories of a given toolchain.
+if (WIN32)
+	file(WRITE "${CMAKE_SOURCE_DIR}/bin/slangc.bat" "${SHADERMAKE_SLANG_PATH} %*")
+else()
+	file(WRITE "${CMAKE_SOURCE_DIR}/bin/slangc.sh" "#!/bin/sh\nexec \"${SHADERMAKE_SLANG_PATH}\" \"$@\"\n")
+	file(CHMOD "${CMAKE_SOURCE_DIR}/bin/slangc.sh" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endif()
 
 # Get implot. 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/support/cmake/FetchImplot.cmake")

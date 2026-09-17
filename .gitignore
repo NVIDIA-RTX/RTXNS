@@ -3,11 +3,17 @@ build/*
 /out
 /.vscode
 /.vs
+/.claude
 /*.zip
 external/slang/windows-x64/release/slang-stdlib.bin
 /external/dx12-agility-sdk
 /external/dx12-agility-sdk-*
 /external/nvapi
+/external/nvapi-*
+/external/dxc-*
+/external/slang-*
+/external/vulkan-headers-*
+/external/directx-headers-*
 
 .venv/
 
@@ -19,3 +25,4 @@ __pycache__/
 # Generated shaders+weights from SlangPyTraining.
 samples/SlangpyTraining/trained_shaders.cfg
 samples/SlangpyTraining/weights.json
+/output_samples

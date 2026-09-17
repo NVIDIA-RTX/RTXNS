@@ -1,5 +1,18 @@
 # RTX Neural Shading Change Log
 
+## 1.5.0
+- Removed the legacy DX12 Cooperative Vector preview `717` / Shader Model 6.9 toolchain path.
+- Updated the DX12 driver requirement for the `721` toolchain to the public NVIDIA R615 driver or newer; the preview driver is no longer required.
+- Updated the Agility SDK to `1.721.3-preview`.
+- Added a project-side workaround for invalid enhanced-barrier validation during DX12 matrix conversion.
+- Added Arm64 (Windows on Arm) build support. Architecture-specific dependencies are selected for the target or build host as appropriate, and ShaderMake is built for the host when cross-compiling.
+- Updated NVAPI to the `R615` developer SDK, including its Arm64 and Arm64EC libraries. NVAPI is downloaded as a source archive of the pinned commit instead of a full Git clone.
+- Build outputs are now written per configuration to `bin/<platform>/<configuration>/`, so Debug and Release builds no longer overwrite each other.
+- Added Ninja-based Windows x64 and Arm64 Debug and Release presets, plus Linux presets. The Windows toolchain files support native and cross builds and validate the selected compiler environment. Other CMake generators remain supported for custom builds.
+- `DONUT_WITH_VULKAN` now defaults to whether the Vulkan SDK is installed, and enabling it without the SDK is a configure-time error. Without the SDK the Vulkan backend and SPIR-V shaders are skipped instead of compiling SPIR-V with whichever `dxc` is found; cross-compiled builds previously picked up the Windows SDK's DXC, which has no SPIR-V code generation (`SPIR-V CodeGen not available`).
+- Vulkan-Headers and DirectX-Headers are now downloaded once as tag archives into shared, versioned `external/` folders instead of being cloned separately for every build directory.
+- Updated the minimum CMake version to 3.24 and consolidated shared archive downloads. DXC, Slang, and headers are reused across build directories, host tool overrides are supported, and generated Slang launcher scripts are platform-specific.
+
 ## 1.4.0
 - Added support for the DX12 Cooperative Vector / Linear Algebra preview `721` toolchain, with temporary compatibility support for preview `717`.
 - Updated shader toolchain defaults to Slang `2026.10`, DXC `v1.10.2605.24`, Agility SDK `1.721.2-preview`, and Shader Model `6_10`.

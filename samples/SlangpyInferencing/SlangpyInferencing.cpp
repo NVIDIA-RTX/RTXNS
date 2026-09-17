@@ -352,11 +352,11 @@ int main(int __argc, const char** __argv)
     {
         if (graphicsApi == nvrhi::GraphicsAPI::VULKAN)
         {
-            log::fatal("Cannot initialize a graphics device with the requested parameters. Please try a NVIDIA driver version greater than 570");
+            log::fatal("Cannot initialize a Vulkan graphics device. Please install an NVIDIA R570 or newer public driver; see the README.");
         }
         if (graphicsApi == nvrhi::GraphicsAPI::D3D12)
         {
-            log::fatal("Cannot initialize a graphics device with the requested parameters. Please use the Shader Model 6-9-Preview Driver, link in the README");
+            log::fatal("Cannot initialize a D3D12 graphics device. Please install an NVIDIA R615 or newer public driver; see the README.");
         }
         return 1;
     }

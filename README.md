@@ -1,40 +1,46 @@
 # RTX Neural Shading
 
-RTX Neural Shading (RTXNS) also known as RTX Neural Shaders, is intended as a starting point for developers interested in bringing Machine Learning (ML) to their graphics applications on Windows or Linux. It provides a number of examples to help the reader understand how to train their own neural networks and then use those models to perform inference alongside their normal graphics rendering. 
+RTX Neural Shading (RTXNS), also known as RTX Neural Shaders, is a starting point for developers interested in bringing machine learning (ML) to graphics applications on Windows or Linux. It includes examples that show how to train neural networks and use the resulting models for inference alongside conventional graphics rendering.
 
-RTXNS uses the [Slang](https://shader-slang.com) shading language and it utilizes either the DirectX Preview Agility SDK or the Vulkan Cooperative Vectors extension to provide access to the GPUs ML acceleration.
+RTXNS uses the [Slang](https://shader-slang.com) shading language and either the DirectX Preview Agility SDK or the Vulkan Cooperative Vector extension to access GPU ML acceleration.
 
-A number of examples are included which build upon each other from a simple inference example to more complex examples showing how to train a neural network to represent a shader or a texture. Helper functions to facilitate building your own neural networks are also included. 
+The examples build on one another, progressing from simple inference to training a neural network to represent a shader or texture. The SDK also includes helper functions for building custom neural networks.
 
-Alongside the core samples is a SlangPy sample to demonstrate how to use python and SlangPy for fast iteration and development of neural networks which can then be integrated into RTXNS for inference. 
+The SlangPy samples demonstrate rapid neural-network development in Python and how to integrate the resulting implementation into RTXNS for inference.
 
 When exploring RTXNS, it is assumed that the reader is already familiar with ML and neural networks.
 
 ## Requirements
 
 ### General
-[CMake v3.24.3][CMake] **|** [Slang v2026.10](https://shader-slang.com/tools/)
 
-### Windows 
-[VS 2022][VS22]
+[CMake 3.24 or later][CMake] **|** [Slang 2026.10*](https://shader-slang.com/tools/)
+
+### Windows
+
+[Visual Studio 2022 or later][VisualStudio]
+
+Both x64 and Arm64 (Windows on Arm) targets are supported. Architecture-specific dependencies such as NVAPI, the Agility SDK, DXC, and Slang are selected for the target or build host as appropriate. `CMakePresets.json` provides Ninja-based Debug and Release presets for native and cross builds. Ninja is required when using these presets, but it is not required by the SDK: custom CMake builds can continue to use Visual Studio or another supported generator. From a command line, run a preset in the Visual Studio Developer Command Prompt for its target architecture. Visual Studio and VS Code can select the same presets directly. See the [Quick Start Guide](docs/QuickStart.md) for commands and cross-compilation details.
 
 ### Linux
+
 [Ninja][Ninja]
 
 ### DirectX (Windows only)
-#### 721 Preview
-[DirectX Preview Agility SDK 1.721.2-preview*](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.721.2-preview) **|** [Microsoft DXC v1.10.2605.24*](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.10.2605.24) **|** [Geforce Shader Model 6-10-Preview Driver](https://developer.nvidia.com/downloads/assets/secure/geforce-drivers/620.12_gameready_win11_win10-dch_64bit_international.exe)
 
-#### 717 Preview
-[DirectX Preview Agility SDK 1.717.0-preview*](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.717.0-preview) **|** [Microsoft DXC 1.8.2505.28*](https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2505.28) **|** [Geforce Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver)  **|** [Quadro Shader Model 6-9-Preview Driver](https://developer.nvidia.com/downloads/assets/secure/shadermodel6-9-preview-driver-quadro) 
+[DirectX Preview Agility SDK 1.721.3-preview*](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.721.3-preview) **|** [Microsoft DXC v1.10.2605.24*](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.10.2605.24) **|** [NVIDIA public R615 driver or newer](https://www.nvidia.com/en-us/drivers/)
 
 ### Vulkan (Windows and Linux)
-GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** Public Driver ≥ 572.16
 
-*Downloaded automatically by CMake during configuration/build (no separate install required).
+GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA RTX 20XX) **|** [Vulkan SDK 1.3.296.0](https://vulkan.lunarg.com/sdk/home) **|** [NVIDIA public R570 driver or newer](https://www.nvidia.com/en-us/drivers/)
+
+CMake detects the Vulkan SDK through the `VULKAN_SDK` environment variable set by its installer (or system-wide Vulkan headers on Linux). When it is not found, the Vulkan backend and the SPIR-V shaders are not built and the samples are DirectX only. Setting `-DDONUT_WITH_VULKAN=ON` without the SDK is a configuration error; `-DDONUT_WITH_VULKAN=OFF` skips Vulkan even when the SDK is installed.
+
+\*Downloaded automatically by CMake during configuration; no separate installation is required.
 
 ## Known Issues
-05/30/2025: When updating from v1.0.0 to v1.1.0 is it recommended to delete the cmake cache to avoid build errors.
+
+05/30/2025: When updating from v1.0.0 to v1.1.0, delete the CMake cache to avoid build errors.
 
 ## Project structure
 
@@ -50,7 +56,7 @@ GPU must support the Vulkan `VK_NV_cooperative_vector` extension (minimum NVIDIA
 ## Getting started
 
 - [Quick start guide](docs/QuickStart.md) for building and running the neural shading samples.
-- [Library usage guide](docs/LibraryGuide.md) for using helper functions
+- [Library usage guide](docs/LibraryGuide.md) for using helper functions.
 
 ### External Resources
 
@@ -88,8 +94,8 @@ Use the following BibTex entry to cite the usage of RTXNS in published research:
 
 See [LICENSE.md](LICENSE.MD)
 
-[VS22]: https://visualstudio.microsoft.com/
+[VisualStudio]: https://visualstudio.microsoft.com/
 
 [Ninja]: https://ninja-build.org/
 
-[CMake]: https://github.com/Kitware/CMake/releases/download/v3.24.3/cmake-3.24.3-windows-x86_64.msi
+[CMake]: https://cmake.org/download/

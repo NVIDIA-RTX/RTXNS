@@ -27,7 +27,7 @@ class SDKSample:
         self.rtxns_dir = self.sdk_root / "src/NeuralShading_Shaders"
         self.spy_sample_dir = self.sdk_root / "samples/SlangpyTraining"
         self.donut_dir = self.sdk_root / "external/donut/include"
-        self.slang_compiler = self.sdk_root / "bin/slangc.bat"
+        self.slang_compiler = self.sdk_root / ("bin/slangc.bat" if os.name == "nt" else "bin/slangc.sh")
 
         search_root = self.sdk_root / "bin"
         bin_ext = ".exe" if os.name == "nt" else ""

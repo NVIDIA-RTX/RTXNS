@@ -19,7 +19,8 @@ set(SHADER_COMPILE_OPTIONS_SPIRV "-X \"-Wno-41017 -capability spvCooperativeVect
 
 set(SHADER_COMPILE_OPTIONS_DXIL "-D DXIL --hlsl2021 -X \"-Wno-41012 -Wno-41016 -Wno-41017 -Xdxc -I${NVAPI_INCLUDE_DIR} -Xdxc -Vd\" " )
 
-set(SHADER_MODEL "6_9")
+# Use the SDK's DX12 preview shader model, like the samples.
+set(SHADER_MODEL "${RTXNS_DX12_SHADER_MODEL}")
 
 set(project Utils)
 set(folder "${LIBRARY_FILTER}/Utils")
@@ -32,7 +33,7 @@ donut_compile_shaders_all_platforms(
     CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/shaders.cfg
 	INCLUDES ${shader_includes}
     FOLDER ${folder}
-    OUTPUT_BASE ${RTXNS_BINARY_DIR}/shaders/${project}
+    OUTPUT_BASE ${RTXNS_OUTPUT_DIR}/shaders/${project}
 	SHADERMAKE_OPTIONS ${SHADER_COMPILE_OPTIONS}
     SHADERMAKE_OPTIONS_SPIRV ${SHADER_COMPILE_OPTIONS_SPIRV}
 	SHADERMAKE_OPTIONS_DXIL ${SHADER_COMPILE_OPTIONS_DXIL}

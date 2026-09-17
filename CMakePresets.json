@@ -1,0 +1,81 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "description": "MSVC with Ninja. 'architecture' uses the external strategy: Visual Studio and VS Code (CMake Tools) set up the developer environment for the target themselves, native or cross, on x64 and ARM64 hosts. From a plain shell, run inside the Developer Command Prompt for the target (vcvarsall x64 or arm64 natively, x64_arm64 or arm64_x64 for cross builds). A Visual Studio generator can be selected with -G on the command line; the toolchain file then sets the platform. Build-time tools (DXC, Slang, ShaderMake) always follow the host.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "ENABLE_DX12_COOP_VECTOR_PREVIEW": "ON" }
+    },
+    {
+      "name": "windows-x64",
+      "hidden": true,
+      "inherits": "windows-base",
+      "architecture": { "value": "x64", "strategy": "external" },
+      "toolchainFile": "${sourceDir}/support/cmake/toolchains/windows-x64.cmake"
+    },
+    {
+      "name": "windows-arm64",
+      "hidden": true,
+      "inherits": "windows-base",
+      "architecture": { "value": "arm64", "strategy": "external" },
+      "toolchainFile": "${sourceDir}/support/cmake/toolchains/windows-arm64.cmake"
+    },
+    {
+      "name": "windows-x64-debug",
+      "displayName": "Windows x64 Debug",
+      "inherits": "windows-x64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 Release",
+      "inherits": "windows-x64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "windows-arm64-debug",
+      "displayName": "Windows ARM64 Debug",
+      "inherits": "windows-arm64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Windows ARM64 Release",
+      "inherits": "windows-arm64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "description": "Ninja, native architecture (x64 or arm64 is detected from the compiler).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-x64-debug",     "configurePreset": "windows-x64-debug" },
+    { "name": "windows-x64-release",   "configurePreset": "windows-x64-release" },
+    { "name": "windows-arm64-debug",   "configurePreset": "windows-arm64-debug" },
+    { "name": "windows-arm64-release", "configurePreset": "windows-arm64-release" },
+    { "name": "linux-debug",           "configurePreset": "linux-debug" },
+    { "name": "linux-release",         "configurePreset": "linux-release" }
+  ]
+}

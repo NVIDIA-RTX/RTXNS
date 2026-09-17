@@ -250,7 +250,28 @@ void NetworkUtilities::ConvertWeights(NetworkLayout const& srcLayout,
         biasDesc.dst.size = dstLayer.biasSize;
     }
 
+    // Current D3D12 runtime/driver combinations reject the documented
+    // D3D12_BARRIER_SYNC_CONVERT_LINEAR_ALGEBRA_MATRIX scope when paired with
+    // the conversion SRV/UAV accesses. This reports debug-layer error or
+    // removes the device when validation is disabled. Use COMMON, whose
+    // enhanced-barrier mapping synchronizes all GPU work, until this is fixed.
+    // See the CoopVecBarrierTest sample for the isolated reproduction.
+    const bool useEnhancedBarrierWorkaround = device->getGraphicsAPI() == nvrhi::GraphicsAPI::D3D12 && device->queryFeatureSupport(nvrhi::Feature::EnhancedBarriers);
+
+    if (useEnhancedBarrierWorkaround)
+    {
+        commandList->setBufferState(srcBuffer, nvrhi::ResourceStates::Common);
+        commandList->setBufferState(dstBuffer, nvrhi::ResourceStates::Common);
+        commandList->commitBarriers();
+        commandList->setEnableAutomaticBarriers(false);
+    }
+
     commandList->convertCoopVecMatrices(convertDescs.data(), convertDescs.size());
+
+    if (useEnhancedBarrierWorkaround)
+    {
+        commandList->setEnableAutomaticBarriers(true);
+    }
 }
 
 HostNetwork::HostNetwork(std::shared_ptr<NetworkUtilities> networkUtils) : m_networkUtils(networkUtils)
