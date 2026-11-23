@@ -8,7 +8,6 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-import CooperativeVectorAutoDiff;
 import CooperativeVectorFunctions;
 import Utils;
 

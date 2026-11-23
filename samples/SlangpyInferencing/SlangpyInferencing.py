@@ -1,20 +1,36 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from app import App
 import slangpy as spy
 import numpy as np
 import json
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+
+SampleDir = Path(__file__).parent
 AssetsPath = Path(__file__).parents[2] / "assets/data"
 
-# Create the app and load the slang module.
-app = App(width=512*3+10*2, height=512, title="Inferencing Example", device_type=spy.DeviceType.vulkan)
-module = spy.Module.load_from_file(app.device, "SlangpyInferencing_pyslang.slang")
+# Create a headless device with the include paths needed by the sample shaders.
+# Results are read back to the CPU and displayed with matplotlib, so no window
+# or swapchain is needed (same approach as the SlangpyTraining sample).
+def create_device():
+    device = spy.Device(
+        type=spy.DeviceType.vulkan,
+        compiler_options=spy.SlangCompilerOptions({
+            "include_paths": [
+                SampleDir,
+                Path(spy.__file__).parent / "slang",
+            ],
+        }),
+    )
+    print("Selected adapter", device.info.adapter_name)
+    return device
+
+device = create_device()
+module = spy.Module.load_from_file(device, "SlangpyInferencing_pyslang.slang")
 
 # Load some materials.
-image = spy.Tensor.load_from_image(app.device,
-                                   AssetsPath / "slangstars.png", linearize=False)
+image = spy.Tensor.load_from_image(device, AssetsPath / "slangstars.png", linearize=False)
 
 class NetworkParameters(spy.InstanceList):
     def __init__(self, data: dict):
@@ -32,7 +48,7 @@ class NetworkParameters(spy.InstanceList):
         biases_np = np.array(data['biases'], dtype=np.float16)
 
         # Convert weights into the device's optimal coopvec inferencing layout.
-        desc = app.device.create_coop_vec_matrix_desc(
+        desc = device.create_coop_vec_matrix_desc(
             self.outputs,
             self.inputs,
             self.layout,
@@ -40,20 +56,20 @@ class NetworkParameters(spy.InstanceList):
         )
         weight_count = desc.size // 2 # sizeof(half)
         params_np = np.zeros((weight_count, ), dtype=np.float16)
-        app.device.convert_coop_vec_matrix(
+        device.convert_coop_vec_matrix(
             params_np,
             weights_np,
             dst_layout=self.layout,
             src_layout=spy.CoopVecMatrixLayout.row_major,
         )
 
-        self.biases = app.device.create_buffer(
+        self.biases = device.create_buffer(
             struct_size=2,
             element_count=self.outputs,
             usage=spy.BufferUsage.shader_resource,
             data=biases_np,
         )
-        self.weights = app.device.create_buffer(
+        self.weights = device.create_buffer(
             struct_size=2,
             element_count=weight_count,
             usage=spy.BufferUsage.shader_resource,
@@ -71,39 +87,40 @@ class Network(spy.InstanceList):
         self.layer2 = NetworkParameters(data['layers'][2])
 
 
-if spy.Feature.cooperative_vector not in module.device.features:
+if spy.Feature.cooperative_vector not in device.features:
     raise RuntimeError("Device does not support cooperative vector API")
 
 trained_weights = json.load(open(AssetsPath / 'weights.json'))
 
 network = Network(trained_weights)
 
-while app.process_events():
+res = spy.int2(256, 256)
 
-    # Blit tensor to screen.
-    offset = 0
-    app.blit(image, size=spy.int2(512), offset=spy.int2(offset,0), bilinear=True, tonemap=False)
-    offset += 512 + 10
-    res = spy.int2(256,256)
+# Run inference for every pixel of the output tensor.
+lr_output = spy.Tensor.empty_like(image)
+module.inference(pixel = spy.call_id(), resolution = res, network = network, _result = lr_output)
 
-    lr_output = spy.Tensor.empty_like(image)
-    module.inference(pixel = spy.call_id(), resolution = res, network = network, _result = lr_output)
+# Loss between the inferred output and the reference image.
+loss_output = spy.Tensor.empty_like(image)
+module.loss(pixel = spy.call_id(),
+              resolution = res,
+              network = network,
+              reference = image,
+              _result = loss_output)
 
-    # Blit tensor to screen.
-    app.blit(lr_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), bilinear=True, tonemap=False)
-    offset += 512 + 10
+# Read the results back to the CPU and show them side by side:
+# the original picture, the inferred picture and the loss image.
+panels = [
+    ("Reference", image),
+    ("Inference", lr_output),
+    ("Loss", loss_output),
+]
 
-    # Loss between downsampled output and quarter res rendered output.
-    loss_output = spy.Tensor.empty_like(image)
-    module.loss(pixel = spy.call_id(),
-                  resolution = res,
-                  network = network,
-                  reference = image,
-                  _result = loss_output)
-
-    # Blit tensor to screen.
-    app.blit(loss_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), bilinear=True, tonemap=False)
-    offset += 512 + 10
-
-    # Present the window.
-    app.present()
+fig, axes = plt.subplots(1, len(panels), figsize=(4.0 * len(panels), 4.3), num="Inferencing Example")
+for ax, (name, tensor) in zip(axes, panels):
+    pixels = np.clip(np.abs(tensor.to_numpy()), 0, 1)
+    ax.imshow(pixels, interpolation="bilinear")
+    ax.set_title(name)
+    ax.set_axis_off()
+fig.tight_layout()
+plt.show()

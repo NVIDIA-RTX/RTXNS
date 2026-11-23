@@ -21,23 +21,26 @@ __exported import Optimizers;
 #define ADAM_BETA2                               0.999f
 #define ADAM_EPSILON                             1E-8f
 
-struct RWNDBufferAccessor : optimizers::IBufferAccessor
+// Adapts a SlangPy tensor to the buffer accessor interface used by the RTXNS optimizers
+struct RWTensorAccessor : optimizers::IBufferAccessor
 {
-    RWNDBuffer<float, 1> m_buffer;
+    RWTensor<float, 1> m_buffer;
     
-    __init(RWNDBuffer<float, 1> buffer)
+    __init(RWTensor<float, 1> buffer)
     {
         m_buffer = buffer;
     }
 
     float get(uint index)
     {
-        return m_buffer[index];
+        return m_buffer[uint1(index)];
     }
 
+    // store() writes through to the tensor's buffer without requiring a mutable accessor,
+    // which the IBufferAccessor interface does not provide
     void set(uint index, float value)
     {
-        m_buffer[index] = value;
+        m_buffer.store(uint1(index), value);
     }
 };
 
@@ -78,30 +81,30 @@ T SampleTexture<T : ITexelElement>(Texture2D<T> tex, float2 uv)
 
 // Take one step with the adam optimizer
 void OptimizerStep(
-    RWNDBuffer<float, 1> moments1,
-    RWNDBuffer<float, 1> moments2,
-    RWNDBuffer<float, 1> paramF,
-    RWNDBuffer<half, 1> paramH,
-    RWNDBuffer<half, 1> grad,
+    RWTensor<float, 1> moments1,
+    RWTensor<float, 1> moments2,
+    RWTensor<float, 1> paramF,
+    RWTensor<half, 1> paramH,
+    RWTensor<half, 1> grad,
     uint idx,
     float learningRate,
     float gradScale,
     int iteration)
 {
-    var optimizer = optimizers::AdamAccessor<RWNDBufferAccessor>(RWNDBufferAccessor(moments1), RWNDBufferAccessor(moments2), learningRate, gradScale);
+    var optimizer = optimizers::AdamAccessor<RWTensorAccessor>(RWTensorAccessor(moments1), RWTensorAccessor(moments2), learningRate, gradScale);
     // Parameters are converted to FP16 for computing gradients,
     // but we keep the FP32 originals around so we don't accumulate
     // rounding errors
-    float parameter = paramF[idx];
-    float gradient = (float)grad[idx];
+    float parameter = paramF[uint1(idx)];
+    float gradient = (float)grad[uint1(idx)];
 
     parameter = optimizer.step(parameter, idx, gradient, iteration);
 
     // Update the reference FP32 parameter, and convert the new value back to FP16
-    paramF[idx] = parameter;
-    paramH[idx] = (half)parameter;
+    paramF[uint1(idx)] = parameter;
+    paramH[uint1(idx)] = (half)parameter;
     // Zero out gradients
-    grad[idx] = 0.0h;
+    grad[uint1(idx)] = 0.0h;
 }
 
 void TrainTexture<Model : rtxns::IModule<half, 2, 3>, Loss : rtxns::mlp::ILoss<float, 3>>(Model model, inout RNG rng, Texture2D<float4> targetTex, float lossScale)
@@ -119,8 +122,10 @@ void TrainTexture<Model : rtxns::IModule<half, 2, 3>, Loss : rtxns::mlp::ILoss<f
     float3 lossGradient = rtxns::mlp::LossDerivFromVector<3, Loss>(
         targetRGB, predictedRGB, lossScale);
 
-    // Backpropragate gradient through network parameters
-    bwd_diff(EvalModel)(model, inputUV, lossGradient);
+    // Backpropagate the gradient through the network parameters. Modules are differentiable pointer
+    // types: the module and its gradient storage (getDifferential) are passed as a pair, and the
+    // synthesized backward pass accumulates the parameter gradients into that storage.
+    bwd_diff(EvalModel)(DifferentialPtrPair<Model>(model, model.getDifferential()), inputUV, lossGradient);
 }
 
 // Convenience functions for evaluating the model from vector inputs

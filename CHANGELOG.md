@@ -1,5 +1,18 @@
 # RTX Neural Shading Change Log
 
+## 1.6.0
+- Kept SDK-managed dependency downloads and host tool builds within the SDK's directories, preserved explicit compiler paths, and prepared the DXC runtime for SDK-managed Slang in embedded builds.
+- Replaced the legacy `ENABLE_DX12_COOP_VECTOR_PREVIEW` opt-in with `DONUT_WITH_DX12`, enabled by default on Windows and respecting the parent project's backend selection.
+- Fixed embedded DX12 builds to reuse existing Agility SDK and NVAPI targets without replacing the parent's configuration.
+- Updated Slang to `2026.20` and migrated to native `CoopVec` autodiff support. Slang `2026.20` or newer is required; see Known Issues in the README.
+- The activation helpers in `CooperativeVectorFunctions.slang` are `[Differentiable]` and rely on the derivatives Slang synthesizes for `CoopVec`; no derivatives are registered by hand anymore.
+- Improved half-precision gradient stability for the sigmoid, swish and tanh activations.
+- Updated the SlangPy training sample to SlangPy `0.43.1`, using tensors and automatic backward-pass generation. `IModule` now extends `IDifferentiablePtrType`, mirroring `TrainingMLP`, so a module's backward pass is synthesized.
+- Switched the SlangPy inferencing sample to Matplotlib display to fix window creation failures on Linux.
+- The CMake project can be embedded with `add_subdirectory()` by a parent that already provides donut, NVRHI and ShaderMake; the SDK only forces toolchain and output settings when it is the top-level project (`RTXNS_IS_TOP_LEVEL`).
+- The Slang `2026.20` Windows package no longer bundles DXC; the configure step places the pinned DXC (`v1.10.2605.24`) next to `slangc`.
+- Removed `CooperativeVectorAutoDiff.slang` and `CooperativeVectorDerivatives.slang`. The `HCoopVec` alias moved to `CooperativeVectorFunctions.slang`; the `SimpleTraining` sample retains the derivative helpers needed by its manual backward pass.
+
 ## 1.5.0
 - Removed the legacy DX12 Cooperative Vector preview `717` / Shader Model 6.9 toolchain path.
 - Updated the DX12 driver requirement for the `721` toolchain to the public NVIDIA R615 driver or newer; the preview driver is no longer required.

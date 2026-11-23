@@ -8,7 +8,6 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-import CooperativeVectorAutoDiff;
 import CooperativeVectorFunctions;
 
 namespace rtxns
@@ -90,11 +89,10 @@ namespace mlp
         ByteAddressBuffer buffer;
     };
 
-    // Linear forward step of MLP using MatrixBiasBuffer structure to store weights and biases
-    [BackwardDerivative(LinearOp_BackwardAutoDiff)]
-    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int,
-        let matrixLayout : CoopVecMatrixLayout,
-        let componentType : CoopVecComponentType>(
+    // Linear forward step of MLP using MatrixBiasBuffer structure to store weights and biases.
+    // Keep matrixLayout/componentType as generic values so they remain compile-time constants
+    // when autodiff forwards them to coopVecMatMulAdd.
+    CoopVec<T, M> LinearOp<T : __BuiltinFloatingPointType, let M : int, let K : int, let matrixLayout : CoopVecMatrixLayout, let componentType : CoopVecComponentType>(
         CoopVec<T, K> ip,
         MatrixBiasBuffer matrixBiasBuffer,
         uint2 offsets)
@@ -108,12 +106,12 @@ namespace mlp
     }
 
     // Linear backward step of MLP using MatrixBiasBuffer and MatrixBiasBufferDifferential
-    void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let K : int,
-        let matrixLayout : CoopVecMatrixLayout,
-        let componentType : CoopVecComponentType>(
+    [BackwardDerivativeOf(LinearOp<T, M, K, matrixLayout, componentType>)]
+    void LinearOp_BackwardAutoDiff<T : __BuiltinFloatingPointType, let M : int, let K : int, let matrixLayout : CoopVecMatrixLayout, let componentType : CoopVecComponentType>(
         inout DifferentialPair<CoopVec<T, K>> ip,
         DifferentialPtrPair<MatrixBiasBuffer> matrixBiasBuffer,
-        uint2 offsets, CoopVec<T, M>.Differential grad)
+        uint2 offsets,
+        CoopVec<T, M>.Differential grad)
     {
         ip = diffPair(
             ip.p,

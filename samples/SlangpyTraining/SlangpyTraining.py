@@ -130,7 +130,7 @@ def training_main():
     vis_resolution = 256
     span = np.linspace(0, 1, vis_resolution, dtype=np.float32)
     vis_uvs_np = np.stack(np.broadcast_arrays(span[None, :], span[:, None]), axis=2)
-    vis_uvs = spy.NDBuffer(device, module.float2.struct, shape=(vis_resolution, vis_resolution))
+    vis_uvs = spy.Tensor.empty(device, shape=(vis_resolution, vis_resolution), dtype=module.float2)
     vis_uvs.copy_from_numpy(vis_uvs_np)
 
     # Create a figure to fill out as we go
@@ -168,8 +168,8 @@ def training_main():
 
         # These match up with the argument names of optimizerStep in SlangpyTraining.slang
         optimizer_state = {
-            "moments1": spy.NDBuffer.zeros_like(parametersF),
-            "moments2": spy.NDBuffer.zeros_like(parametersF),
+            "moments1": spy.Tensor.zeros_like(parametersF),
+            "moments2": spy.Tensor.zeros_like(parametersF),
             "paramF": parametersF,
             "paramH": parameters,
             "grad": grads,
@@ -184,6 +184,9 @@ def training_main():
         eval_model = module[f"EvalModel<{model.type_name} >"]
         eval_loss = module[f"EvalLoss<{loss_name} >"]
 
+        # Bind the model data to its Slang struct type for the calls below
+        model_instance = model.instance(module)
+
         # Begin main training loop
         iteration = 1
         for epoch in range(num_epochs):
@@ -194,7 +197,7 @@ def training_main():
             # Each batch is submitted to a command buffer
             for batch in range(num_batches_per_epoch):
                 # Compute gradients
-                train_texture.append_to(cmd, model, rng, target_tex, loss_scale)
+                train_texture.append_to(cmd, model_instance, rng, target_tex, loss_scale)
                 # Do one parameter optimization step using those gradients
                 optimizer_step.append_to(cmd, idx=spy.call_id((num_params, )), iteration=iteration, **optimizer_state)
                 #optimizer_step.append_to(cmd, idx=spy.call_id((num_params, )), iteration=iteration, moments1=optimizer_state["moments1"])
@@ -216,7 +219,7 @@ def training_main():
             # In the interactive case, draw updates to window and compute loss. This goes
             # through the CPU, so this is quite slow
             if INTERACTIVE:
-                current_prediction = eval_model(model, vis_uvs, _result=np.ndarray)
+                current_prediction = eval_model(model_instance, vis_uvs, _result=np.ndarray)
                 loss_val = np.mean(eval_loss(vis_uvs, current_prediction, target_tex, _result=np.ndarray))
                 diff = module.TextureDifference(vis_uvs, current_prediction, target_tex, 10.0, _result=np.ndarray)
 

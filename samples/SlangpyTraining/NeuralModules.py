@@ -9,7 +9,6 @@
 
 import slangpy as spy
 from slangpy.reflection import SlangType
-from slangpy.types import NDBuffer
 from typing import Any
 import numpy as np
 import math
@@ -34,13 +33,19 @@ class CoopVecModule:
     # Returns a dictionary containing the data for the slang struct
     def get_this(self):
         raise NotImplementedError()
+
+    # Returns the module data bound to its Slang struct type, ready to be passed to SlangPy calls.
+    # SlangPy cannot infer a generic struct type from a plain dictionary when one of the generic
+    # arguments is an enum value (CoopVecComponentType here), so the type is looked up explicitly.
+    def instance(self, module: spy.Module) -> spy.InstanceList:
+        return spy.InstanceList(module[self.type_name], self.get_this())
     
     # Returns a list of buffers containing the trainable parameters of this module
-    def parameters(self) -> tuple[NDBuffer, ...]:
+    def parameters(self) -> tuple[spy.Tensor, ...]:
         raise NotImplementedError()
     
     # Returns a list of buffers containing the gradients of the trainable parameters
-    def gradients(self) -> tuple[NDBuffer, ...]:
+    def gradients(self) -> tuple[spy.Tensor, ...]:
         raise NotImplementedError()
 
 
@@ -98,10 +103,10 @@ class ModuleChain(CoopVecModule):
             }
         return result
     
-    def parameters(self) -> tuple[NDBuffer, ...]:
+    def parameters(self) -> tuple[spy.Tensor, ...]:
         return sum((m.parameters() for m in self.modules), ())
     
-    def gradients(self) -> tuple[NDBuffer, ...]:
+    def gradients(self) -> tuple[spy.Tensor, ...]:
         return sum((m.gradients() for m in self.modules), ())
 
     @property
@@ -149,10 +154,10 @@ class FrequencyEncoding(CoopVecModule):
     def get_initializer(self):
         return "{}"
     
-    def parameters(self) -> tuple[NDBuffer, ...]:
+    def parameters(self) -> tuple[spy.Tensor, ...]:
         return ()
 
-    def gradients(self) -> tuple[NDBuffer, ...]:
+    def gradients(self) -> tuple[spy.Tensor, ...]:
         return ()
     
 
@@ -232,6 +237,17 @@ class TanhAct(Activation):
 
 # Stores the buffer and offset info that backs of multiple CoopVec matrices
 # and biases packed into a single structuredbuffer
+# Byte alignment of the matrices and bias vectors inside a parameter buffer. Cooperative vector
+# matrices must be 64-byte aligned; the SDK's NetworkUtilities uses the same alignment for both
+# (see s_matrixAlignment in NeuralNetwork.cpp), so the Python layout mirrors the C++ one.
+COOPVEC_MATRIX_ALIGNMENT = 64
+COOPVEC_VECTOR_ALIGNMENT = 64
+
+
+def align_to(alignment: int, value: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
 class CoopVecParams:
     def __init__(self, device: spy.Device, dtype: spy.DataType, layout: spy.CoopVecMatrixLayout, widths: tuple[int, ...]):
         super().__init__()
@@ -245,23 +261,22 @@ class CoopVecParams:
         self.bias_offsets = []
         cur_offset = 0
         for fan_in, fan_out in zip(widths[:-1], widths[1:]):
-            cur_offset = device.coopvec_align_matrix_offset(cur_offset)
-            desc = device.coopvec_create_matrix_desc(fan_out, fan_in, layout, dtype, cur_offset)
+            cur_offset = align_to(COOPVEC_MATRIX_ALIGNMENT, cur_offset)
+            desc = device.create_coop_vec_matrix_desc(fan_out, fan_in, layout, dtype, cur_offset)
             self.matrix_descs.append(desc)
-            cur_offset += self.matrix_descs[-1].size
+            cur_offset += desc.size
 
-            cur_offset = device.coopvec_align_vector_offset(cur_offset)
+            cur_offset = align_to(COOPVEC_VECTOR_ALIGNMENT, cur_offset)
             self.bias_offsets.append(cur_offset)
             cur_offset += desc.rows * self.elem_size
 
-        # Create the buffer
-        usage = spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access | spy.BufferUsage.shared
-        self.elem_count = cur_offset // self.elem_size
-        self.buffer = NDBuffer(device, dtype_name(dtype), self.elem_count, usage=usage)
+        # Create the GPU buffer. The modules bind it as a ByteAddressBuffer and the optimizer as a
+        # tensor, which the default Tensor usage (shader resource + unordered access) covers.
+        self.elem_count = align_to(COOPVEC_MATRIX_ALIGNMENT, cur_offset) // self.elem_size
+        self.buffer = spy.Tensor.zeros(device, shape=(self.elem_count, ), dtype=dtype_name(dtype))
 
         # Create a CPU buffer and pre-slice it into weights and biases that can be
         # more easily handled later
-        np_type = dtype_to_numpy(dtype)
         self.np_buffer = self.buffer.to_numpy()
         self.weights: list[np.ndarray] = []
         self.biases: list[np.ndarray] = []
@@ -273,11 +288,11 @@ class CoopVecParams:
 
             self.biases.append(np_bias)
             self.weights.append(np_weight)
-    
+
     # Copy weights from GPU to CPU
     def to_cpu(self):
         self.np_buffer[:] = self.buffer.to_numpy()
-    
+
     # Copy weights from CPU to GPU
     def to_gpu(self):
         self.buffer.copy_from_numpy(self.np_buffer)
@@ -338,8 +353,7 @@ class TrainableMLP(CoopVecModule):
 
         param_buf = self.params_coopvec.buffer
         self.param_buffer = param_buf
-        self.grad_buffer = NDBuffer(self.device, param_buf.dtype, shape=param_buf.shape, usage=param_buf.usage)
-        self.grad_buffer.clear()
+        self.grad_buffer = spy.Tensor.zeros_like(param_buf)
         self.to_coopvec()
 
 
@@ -348,10 +362,14 @@ class TrainableMLP(CoopVecModule):
         dst.to_cpu()
         for i in range(self.num_layers):
             dst.biases[i][:] = src.biases[i]
+
+        # Convert the weight matrices between layouts on the host. The descriptors carry the offset of
+        # every matrix inside its buffer, so both parameter blobs are passed whole; the bias regions
+        # copied above are left untouched by the conversion.
+        dst_bytes = bytearray(dst.np_buffer.tobytes())
+        self.device.convert_coop_vec_matrices(dst_bytes, dst.matrix_descs, src.np_buffer.tobytes(), src.matrix_descs)
+        dst.np_buffer[:] = np.frombuffer(dst_bytes, dtype=dst.np_buffer.dtype)
         dst.to_gpu()
-        
-        self.device.coopvec_convert_matrix_device(
-            src.buffer.storage, src.matrix_descs, dst.buffer.storage, dst.matrix_descs)
 
     def to_coopvec(self):
         self._copy(self.params_rowmaj, self.params_coopvec)
@@ -369,17 +387,18 @@ class TrainableMLP(CoopVecModule):
             f"{self.hidden_act.type_name(self.element_type, self.hidden_width)}, "
             f"{self.output_act.type_name(self.element_type, self.fan_out)}>")
 
-    def parameters(self) -> tuple[NDBuffer, ...]:
+    def parameters(self) -> tuple[spy.Tensor, ...]:
         return (self.param_buffer, )
     
-    def gradients(self) -> tuple[NDBuffer, ...]:
+    def gradients(self) -> tuple[spy.Tensor, ...]:
         return (self.grad_buffer, )
     
 
     def get_this(self):
         return {
-            "parameters": self.param_buffer.storage,
-            "derivatives": self.grad_buffer.storage,
+            # MatrixBiasBuffer / MatrixBiasBufferDifferential wrappers around the raw buffers
+            "parameters": {"buffer": self.param_buffer.storage},
+            "derivatives": {"buffer": self.grad_buffer.storage},
             "matrixOffsets": self.params_coopvec.weight_offsets,
             "biasOffsets": self.params_coopvec.bias_offsets,
             "hiddenAct": self.hidden_act.get_this(),

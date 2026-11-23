@@ -9,7 +9,7 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
-      "cacheVariables": { "ENABLE_DX12_COOP_VECTOR_PREVIEW": "ON" }
+      "cacheVariables": { "DONUT_WITH_DX12": "ON" }
     },
     {
       "name": "windows-x64",

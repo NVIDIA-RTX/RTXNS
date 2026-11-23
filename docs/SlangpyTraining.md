@@ -95,7 +95,7 @@ then we run the same function as before, but now applied individually to each of
 
 Applying a function equally over a large group of data is core to graphics programming, and the goal of SlangPy is to make this easy. SlangPy accepts a variety of different types as arguments, including NumPy arrays, textures and torch.Tensors.
 
-SlangPy comes with a handful of builtin types to make working with calls easier. The default return type of a SlangPy call is `NDBuffer`, which is a GPU buffer with a given shape and (Slang) element type. It's possible to request alternate output formats, e.g. in the form of a NumPy array, by passing a type to the `_result` argument like in the example above.
+SlangPy comes with a handful of builtin types to make working with calls easier. The default return type of a SlangPy call is `Tensor`, which is a GPU buffer with a given shape and (Slang) element type. It's possible to request alternate output formats, e.g. in the form of a NumPy array, by passing a type to the `_result` argument like in the example above.
 
 ### Passing structs
 
@@ -129,13 +129,16 @@ The approach is similar to PyTorch. RTXNS components conform to a shared interfa
 
 To achieve this, this sample adds a small wrapper around RTXNS in `NeuralModules.slang`. First, it introduces a new interface:
 ```
-interface IModule<T : __BuiltinFloatingPointType, let NumInputs : int, let NumOutputs : int>
+interface IModule<T : __BuiltinFloatingPointType, let NumInputs : int, let NumOutputs : int> : IDifferentiablePtrType
 {
-    [BackwardDifferentiable]
+    [Differentiable]
     CoopVec<T, NumOutputs> forward(CoopVec<T, NumInputs> inputParams);
+
+    // The gradient storage paired with this module when differentiating with bwd_diff
+    This.Differential getDifferential();
 }
 ```
-A type that conforms to `IModule<T, NumIn, NumOut>` will provide a `forward` method that takes a CoopVector with `NumIn` elements of type `T`, does some computation, and returns a CoopVector with `NumOut` elements.
+A type that conforms to `IModule<T, NumIn, NumOut>` will provide a `forward` method that takes a CoopVector with `NumIn` elements of type `T`, does some computation, and returns a CoopVector with `NumOut` elements. Modules are differentiable pointer types (`IDifferentiablePtrType`), following the same pattern as `TrainingMLP` and its `MatrixBiasBuffer`: a module holds its parameter buffers, and its `Differential` type holds the matching gradient buffers. `getDifferential()` returns that gradient half so a caller can pair the two for back-propagation.
 
 This way, we can write generic code that can work with any model, without actually needing to know what the model is. For example, `SlangpyTraining.slang` defines this function:
 ```
@@ -149,7 +152,7 @@ float3 EvalModel<Model: rtxns::IModule<half, 2, 3>>(Model model, no_diff float2 
     return rtxns::VectorFromCoopVec(result);
 }
 ```
-to evaluate a model. From the interface constraint `Model: rtxns::IModule<half, 2, 3>`, we know the model takes 2 inputs and produces 3 outputs (UV coordinates and RGB in this sample), and it will correctly evaluate any model that conforms to this requirement. Both `IModule::forward` and `EvalModel` are marked as differentiable, meaning we can backpropagate through the model just by calling `bwd_diff(EvalModel)`.
+to evaluate a model. From the interface constraint `Model: rtxns::IModule<half, 2, 3>`, we know the model takes 2 inputs and produces 3 outputs (UV coordinates and RGB in this sample), and it will correctly evaluate any model that conforms to this requirement. Both `IModule::forward` and `EvalModel` are marked as differentiable, meaning we can backpropagate through the model just by calling `bwd_diff(EvalModel)` with the model and its gradient storage paired in a `DifferentialPtrPair`.
 
 This lets us write a completely generic training function that will compute the gradients for a model that should fit a reference texture:
 ```
@@ -171,7 +174,7 @@ void TrainTexture<
     float3 lossGradient = Loss.deriv(targetRGB, predictedRGB, lossScale);
 
     // Backpropragate gradient through network parameters
-    bwd_diff(EvalModel)(model, inputUV, lossGradient);
+    bwd_diff(EvalModel)(DifferentialPtrPair<Model>(model, model.getDifferential()), inputUV, lossGradient);
 }
 ```
 This function follows the same pattern as the [Simple Training](SimpleTraining.md) example, except that the model itself is now abstracted into a generic parameter. It goes through the following steps:
@@ -179,7 +182,7 @@ This function follows the same pattern as the [Simple Training](SimpleTraining.m
 - Evaluate the reference RGB color `targetRGB` by sampling the target texture
 - Evaluate the model at the same coordinate with `EvalModel` to get the `predictedRGB` color
 - Compute the gradient of the loss comparing them with `Loss.deriv(targetRGB, predictedRGB, lossScale);`
-- Backpropagate the gradient with `bwd_diff(EvalModel)`.
+- Backpropagate the gradient with `bwd_diff(EvalModel)`, passing the model paired with `model.getDifferential()` so the parameter gradients accumulate into the module's gradient buffers.
 
 Compared with the previous sample, this version is concise and reusable: any model that takes two inputs and produces three outputs can be supplied, and Slang generates the corresponding inference and gradient code.
 
@@ -222,7 +225,8 @@ This gets a bit tedious. However, we don't have to declare this type by hand - P
 
 `NeuralModules.py` defines many of the same types as `NeuralModules.slang`, with `CoopVecModule` as the root type. The name avoids confusion with the SlangPy `Module` or PyTorch's `Module`. It defines a few useful abstract functions:
 - `@property type_name`: Returns a string corresponding to the slang type this module represents
-- `get_this()`: Returns a dictionary with the module fields. This way, a `CoopVecModule` instance can be passed directly to Slang. 
+- `get_this()`: Returns a dictionary with the module fields.
+- `instance(module)`: Binds that dictionary to the module's Slang struct type as a `spy.InstanceList`, which is what gets passed to Slang. SlangPy cannot infer a generic struct type from a plain dictionary when one of the generic arguments is an enum value, such as `CoopVecComponentType::Float16`, so the type is looked up explicitly.
 - `parameters()`, `gradients()`: A list of parameter buffers and their gradients that will be used/produced in forward/backward, respectively
 
 With the Python modules, we can start building network architectures like the one above:
@@ -239,11 +243,11 @@ mlp_with_encoding = ModuleChain(
                     output_act=SigmoidAct())
 )
 ```
-This does a few things. Instantiating `TrainableMLP` creates the cooperative-vector buffers that store weight and bias parameters and gradients; these are available through `mlp_with_encoding.parameters()` and `.gradients()`, respectively. It also provides the model's type name. Finally, `get_this()` allows `mlp_with_encoding` to be passed directly to Slang functions expecting an `IModule`.
+This does a few things. Instantiating `TrainableMLP` creates the cooperative-vector buffers that store weight and bias parameters and gradients; these are available through `mlp_with_encoding.parameters()` and `.gradients()`, respectively. It also provides the model's type name. Finally, `instance(module)` binds the buffers and settings to that type so `mlp_with_encoding` can be passed to Slang functions expecting an `IModule`.
 
 For example, calling `EvalModel` can be done with
 ```
-module[f"EvalModel<{mlp_with_encoding.type_name}>"](mlp_with_encoding, ....)
+module[f"EvalModel<{mlp_with_encoding.type_name}>"](mlp_with_encoding.instance(module), ....)
 ```
 Because `EvalModel` is generic, we need to specialize it with the generic arguments first before we can call it with SlangPy. We can do this by building the function name as a string and looking it up in the Slang module with `[]`.
 
@@ -329,7 +333,7 @@ This gives us an `ndarray` of shape `batch_shape`, filled with random integers. 
 ```
 rng = module.RNG(seeds)
 ```
-The slang constructor takes a single `uint`, but because we pass an array of `uint`s, the constructor is vectorized and called once for each entry in `seeds`. The output value will be an `NDBuffer` of `RNG` instances, of shape `batch_shape`.
+The slang constructor takes a single `uint`, but because we pass an array of `uint`s, the constructor is vectorized and called once for each entry in `seeds`. The output value will be a `Tensor` of `RNG` instances, of shape `batch_shape`.
 
 ### Setting up training
 
@@ -368,11 +372,11 @@ parametersF = module.ConvertToFloat(parameters)
 ```
 It is applied to each `half` element in `parameters`, and returns a buffer of the same shape, but of type `float`. Nice!
 
-We also need to create two buffers for the optimizer moments and initialize them to zero. `NDBuffer` has a static `zeros_like` function for this that creates a zero-initialized `NDBuffer` with the same shape and dtype as an existing buffer. With this, we can set up the optimizer state:
+We also need to create two buffers for the optimizer moments and initialize them to zero. `Tensor` has a static `zeros_like` function for this that creates a zero-initialized `Tensor` with the same shape and dtype as an existing buffer. With this, we can set up the optimizer state:
 ```
 optimizer_state = {
-    "moments1": NDBuffer.zeros_like(parametersF),
-    "moments2": NDBuffer.zeros_like(parametersF),
+    "moments1": spy.Tensor.zeros_like(parametersF),
+    "moments2": spy.Tensor.zeros_like(parametersF),
     "paramF": parametersF,
     "paramH": parameters,
     "grad": grads,
@@ -417,7 +421,7 @@ When doing many calls in a tight loop, it can be faster to append them to a comm
 cmd = device.create_command_buffer()
 cmd.open()
 for batch in range(num_batches_per_epoch):
-    train_texture.append_to(cmd, model, rng, target_tex, loss_scale)
+    train_texture.append_to(cmd, model_instance, rng, target_tex, loss_scale)
     optimizer_step.append_to(cmd, idx=call_id((num_params, )), iteration=iteration, **optimizer_state)
     iteration += 1
 cmd.close()
@@ -501,26 +505,40 @@ struct TrainableMLPModule<
 ```
 This takes the same generic parameters as the `TrainingMLP` used in the [Shader Training](ShaderTraining.md) sample, with the addition of the hidden and output activations. 
 
-Internally, the module stores all the information needed to create and evaluate a `TrainingMLP`:
+Internally, the module stores all the information needed to evaluate a `TrainingMLP`. The weights and biases are wrapped in a `MatrixBiasBuffer` and the gradient buffer in a `MatrixBiasBufferDifferential`, exactly as `TrainingMLP` does. `[DerivativeMember]` tells Slang that the latter is the differential of the former, and `TrainableMLPModuleDifferential` is the module's `Differential` type:
 ```
 /* ... */
-    ByteAddressBuffer parameters;
-    RWByteAddressBuffer derivatives; 
+    typealias Differential = TrainableMLPModuleDifferential;
+
+    [DerivativeMember(TrainableMLPModuleDifferential.parameters)]
+    mlp::MatrixBiasBuffer parameters;
+    no_diff mlp::MatrixBiasBufferDifferential derivatives;
     uint matrixOffsets[NumHiddenLayers + 1];
     uint biasOffsets[NumHiddenLayers + 1];
 
     HiddenAct hiddenAct;
     OutputAct outputAct;
+
+    Differential getDifferential()
+    {
+        return { derivatives };
+    }
 /* ... */
 ```
 
-The forward method then does exactly that:
+The forward method builds the layer offsets and calls `TrainingMLP::forward_s`, the same differentiable forward pass the Shader Training sample trains with. Because the module is a differentiable pointer type, Slang synthesizes the backward pass from this function: `LinearOp` supplies the derivative of every linear step and accumulates the weight and bias gradients into the paired `derivatives` buffer. No hand-written backward pass is needed, and the module satisfies the `IModule` requirement in both forward and backward mode, which Slang 2026.14 and newer check:
 ```
 /* ... */
-[BackwardDerivative(backward)]
+[Differentiable]
 CoopVec<T, OutputNeurons> forward(CoopVec<T, InputNeurons> inputParams)
 {
-    var mlp = mlp::TrainingMLP<
+    uint2 layerOffsets[NumHiddenLayers + 1];
+
+    [ForceUnroll]
+    for (int i = 0; i <= NumHiddenLayers; ++i)
+        layerOffsets[i] = uint2(matrixOffsets[i], biasOffsets[i]);
+
+    return mlp::TrainingMLP<
         T, 
         NumHiddenLayers, 
         InputNeurons, 
@@ -528,8 +546,7 @@ CoopVec<T, OutputNeurons> forward(CoopVec<T, InputNeurons> inputParams)
         OutputNeurons, 
         CoopVecMatrixLayout::TrainingOptimal, 
         ComponentType
-    >(parameters, derivatives, matrixOffsets, biasOffsets);
-    return mlp.forward(inputParams, hiddenAct, outputAct);
+    >::forward_s(inputParams, parameters, layerOffsets, hiddenAct, outputAct);
 }
 /* ... */
 ```
@@ -552,13 +569,22 @@ struct ModuleChain<
 ```
 It takes two other modules, `First` and `Second`. The generic constraint here guarantees that `Second` takes as many outputs as `First` produces.
 
-The rest of the implementation then is easy. `ModuleChain` stores the two modules, and the `forward` method calls the first and feeds forward the output to the second:
+The rest of the implementation then is easy. `ModuleChain` stores the two modules, and the `forward` method calls the first and feeds forward the output to the second. Its `Differential` type, `ModuleChainDifferential`, simply holds the differentials of both modules, and `[DerivativeMember]` maps each field to its counterpart:
 ```
 {
+    typealias Differential = ModuleChainDifferential<First, Second>;
+
+    [DerivativeMember(ModuleChainDifferential<First, Second>.first)]
     First first;
+    [DerivativeMember(ModuleChainDifferential<First, Second>.second)]
     Second second;
 
-    [BackwardDifferentiable]
+    Differential getDifferential()
+    {
+        return { first.getDifferential(), second.getDifferential() };
+    }
+
+    [Differentiable]
     CoopVec<T, NumOutputs> forward(CoopVec<T, NumInputs> inputParams)
     {
         CoopVec<T, NumHidden> middle = first.forward(inputParams);

@@ -41,7 +41,7 @@ endif()
 set(RTXNS_HOST_SHADERMAKE "" CACHE FILEPATH "Optional: prebuilt ShaderMake executable for the build host. When set, the configure-time host build of ShaderMake is skipped.")
 
 set(_shadermake_src "${DONUT_DIR}/ShaderMake/ShaderMake")
-set(_shadermake_bin "${CMAKE_BINARY_DIR}/host-tools/ShaderMake")
+set(_shadermake_bin "${CMAKE_CURRENT_BINARY_DIR}/host-tools/ShaderMake")
 
 message(STATUS "RTXNS: cross-compiling (${RTXNS_HOST_ARCH} host -> ${RTXNS_TARGET_ARCH} target); ShaderMake must be a host executable")
 
@@ -87,7 +87,7 @@ else()
 
         file(TO_NATIVE_PATH "${_vcvarsall}" _vcvarsall_native)
         file(TO_NATIVE_PATH "${CMAKE_COMMAND}" _cmake_native)
-        set(_shadermake_wrapper "${CMAKE_BINARY_DIR}/host-tools/cmake-host-env.bat")
+        set(_shadermake_wrapper "${CMAKE_CURRENT_BINARY_DIR}/host-tools/cmake-host-env.bat")
         set(_shadermake_cmake "${_shadermake_wrapper}")
         file(WRITE "${_shadermake_wrapper}"
 "@echo off

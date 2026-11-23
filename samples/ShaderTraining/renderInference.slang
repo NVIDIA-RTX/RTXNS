@@ -11,7 +11,6 @@
 #include "NetworkConfig.h"
 #include <donut/shaders/binding_helpers.hlsli>
 
-import CooperativeVectorAutoDiff;
 import CooperativeVectorFunctions;
 import Utils;
 import Activation;

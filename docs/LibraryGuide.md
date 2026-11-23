@@ -213,7 +213,7 @@ CoopVec<T, K> LinearOp_Backward<
 
 #### Differentiable  LinearOps
 
-The second half of this module extends cooperative vectors to support Slang AutoDiff.
+The second half of this module makes `LinearOp` usable with Slang AutoDiff. `CoopVec` itself is natively differentiable as of Slang 2026.12.2, so the library only has to provide a backward derivative for the linear step, which accumulates the weight and bias gradients into a separate buffer.
 
 The `MatrixBiasBuffer` and `MatrixBiasBufferDifferential` structures inherit Slang's `IDifferentiablePtrType` interface so the matrix buffer and its derivative will support auto differentiation.
 
@@ -274,7 +274,7 @@ void LinearOp_BackwardAutoDiff<
 
 ### Activation Function Module
 
-This module provides implementations of common activation functions
+This module provides implementations of common activation functions. Each `eval` is marked `[Differentiable]` and is built from the `[Differentiable]` helpers in `CooperativeVectorFunctions.slang` (`relu`, `leakyReLU`, `sigmoid`, `shiftedExp`, `swish`, `tanhCoopVec`). `CoopVec` is natively differentiable as of Slang `2026.12`, so Slang synthesizes the backward pass of every activation; no derivatives are registered by hand. Because the backward pass is synthesized rather than hand-written, the forward formulas are chosen so that their derivatives stay finite in half precision: `sigmoid` uses the overflow-free form `exp(min(v, 0)) / (1 + exp(-|v|))`, and `swish` and `tanhCoopVec` are built on it. Keep that in mind when adding activations: any `exp()` whose argument can exceed about 11 will overflow in half, and the synthesized derivative then turns into NaN.
 
 ```
 struct NoneAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>
@@ -299,7 +299,7 @@ struct TanhAct<T : __BuiltinFloatingPointType, let K : int> : IActivation<T, K>
 
 ### MLP Module
 
-The MLP module contains two structures for representing and running a neural network; `InferenceMLP` and `TrainingMLP`. Both structures contain functions for running a full forward pass on the network, where they differ is the use case for each. `InferenceMLP` is for inferencing only and provides a forward pass function only. `TrainingMLP` is used for training a network and contains an additional buffer for derivatives and a backwards pass function. `TrainingMLP` uses Slang's auto differentiation  functionality to generate a backwards propagation function instead of providing an implementation for it. 
+The MLP module contains two structures for representing and running a neural network; `InferenceMLP` and `TrainingMLP`. Both structures contain functions for running a full forward pass on the network, where they differ is the use case for each. `InferenceMLP` is for inferencing only and provides a forward pass function only. `TrainingMLP` is used for training a network and contains an additional buffer for derivatives and a backwards pass function. `TrainingMLP` uses Slang's auto differentiation functionality to generate a backwards propagation function instead of providing an implementation for it. 
 
 #### InferenceMLP
 

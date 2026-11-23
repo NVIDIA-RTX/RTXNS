@@ -329,7 +329,7 @@ lossGradient *= LOSS_SCALE;
 CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> lossGradientCV = CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS>(VECTOR_FORMAT(lossGradient[0]), VECTOR_FORMAT(lossGradient[1]), VECTOR_FORMAT(lossGradient[2]));
 ```
 
-To compute the back propagation, we need to call derivative implementations of the activation functions and a backward version of the linear regression. These have been implemented in the `rtxns` namespace and can be easily extended. This will propagate the loss gradient back through the network. 
+To compute the back propagation, we need to call derivative implementations of the activation functions and a backward version of the linear step. `rtxns::LinearOp_Backward` is provided by the library. The activation derivatives, `sigmoid_Derivative` and `leakyReLU_Derivative`, are defined at the top of this sample's shader because this sample writes its backward pass by hand; the library's own training path relies on Slang AutoDiff instead (see [Shader Training](ShaderTraining.md)). This will propagate the loss gradient back through the network.
 
 ```
 // Backpropagation pass: generate gradients and accumulate them for the optimization pass.
@@ -337,7 +337,7 @@ CoopVec<VECTOR_FORMAT, OUTPUT_NEURONS> outputGradient;
 CoopVec<VECTOR_FORMAT, HIDDEN_NEURONS> hiddenGradient;
 
 // Output layer (loss gradient) to final hidden layer
-outputGradient = rtxns::sigmoid_Backward(outputParams, lossGradientCV);
+outputGradient = rtxns::sigmoid_Derivative(outputParams, lossGradientCV);
 hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
    hiddenActivated[NUM_HIDDEN_LAYERS - 1], outputGradient, gMLPParams, gMLPParamsGradients, 
    weightOffsets[NUM_HIDDEN_LAYERS], biasOffsets[NUM_HIDDEN_LAYERS]);
@@ -345,14 +345,14 @@ hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, OUTPUT_NEURONS, HIDDEN_
 // Hidden layer to hidden layer 
 for(int layer = NUM_HIDDEN_LAYERS - 1; layer >= 1; layer--)
 {
-    hiddenGradient = rtxns::leakyReLU_Backward(hiddenParams[layer], RELU_LEAK, hiddenGradient);
+    hiddenGradient = rtxns::leakyReLU_Derivative(hiddenParams[layer], RELU_LEAK, hiddenGradient);
     hiddenGradient = rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, HIDDEN_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>
         (hiddenActivated[layer - 1], hiddenGradient, gMLPParams, gMLPParamsGradients, 
         weightOffsets[layer], biasOffsets[layer]);
 }
 
 // First hidden layer to input layer
-hiddenGradient = rtxns::leakyReLU_Backward(hiddenParams[0], RELU_LEAK, hiddenGradient);
+hiddenGradient = rtxns::leakyReLU_Derivative(hiddenParams[0], RELU_LEAK, hiddenGradient);
 rtxns::LinearOp_Backward<VECTOR_FORMAT, HIDDEN_NEURONS, INPUT_NEURONS, MATRIX_LAYOUT, TYPE_INTERPRETATION>(
     inputParams, hiddenGradient, gMLPParams, gMLPParamsGradients, weightOffsets[0], 
     biasOffsets[0]);

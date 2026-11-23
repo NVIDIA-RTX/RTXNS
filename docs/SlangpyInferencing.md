@@ -35,6 +35,7 @@ This approach is valuable for graphics and ML engineers balancing experimentatio
 - Required Python packages (installed via `requirements.txt`):
     - SlangPy
     - NumPy
+    - Matplotlib
 
 ### Installing Required Python Modules
 
@@ -63,14 +64,22 @@ The Python sample uses the SlangPy library to call GPU code written in Slang fro
 
 #### Device Setup and Loading Slang Source Code
 
-Create a window with an attached `Device` object using the `App` class from `app.py`:
+Create a headless `Device`. The sample does not open a window or a swapchain: results are read back to the CPU and displayed with matplotlib, in the same way as the SlangPy Training sample. The include paths cover the sample directory and SlangPy's own Slang sources:
 ```python
-app = App(width=512*3+10*2, height=512, title="Mipmap Example", device_type=spy.DeviceType.vulkan)
+device = spy.Device(
+    type=spy.DeviceType.vulkan,
+    compiler_options=spy.SlangCompilerOptions({
+        "include_paths": [
+            SampleDir,
+            Path(spy.__file__).parent / "slang",
+        ],
+    }),
+)
 ```
 
 Load a Slang module:
 ```python
-module = spy.Module.load_from_file(app.device, "SlangpyInferencing_pyslang.slang")
+module = spy.Module.load_from_file(device, "SlangpyInferencing_pyslang.slang")
 ```
 
 #### Neural Network Data Structures
@@ -127,30 +136,35 @@ trained_weights = json.load(open(AssetsPath / 'weights.json'))
 network = Network(trained_weights)
 ```
 
-In the main loop, display the original picture, call inference and loss functions from Slang, and blit result images:
+Run inference and the loss function from Slang for every pixel, then read the results back to the CPU and display the original picture, the inferred picture and the loss image side by side with matplotlib:
 
 ```python
-while app.process_events():
-    offset = 0
-    app.blit(image, size=spy.int2(512), offset=spy.int2(offset,0), bilinear=True, tonemap=False)
-    offset += 512 + 10
-    res = spy.int2(256,256)
+res = spy.int2(256, 256)
 
-    lr_output = spy.Tensor.empty_like(image)
-    module.inference(pixel = spy.call_id(), resolution = res, network = network, _result = lr_output)
-    app.blit(lr_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), bilinear=True, tonemap=False)
-    offset += 512 + 10
+lr_output = spy.Tensor.empty_like(image)
+module.inference(pixel = spy.call_id(), resolution = res, network = network, _result = lr_output)
 
-    loss_output = spy.Tensor.empty_like(image)
-    module.loss(pixel = spy.call_id(),
-                resolution = res,
-                network = network,
-                reference = image,
-                _result = loss_output)
-    app.blit(loss_output, size=spy.int2(512, 512), offset=spy.int2(offset, 0), tonemap=False)
-    offset += 512 + 10
+loss_output = spy.Tensor.empty_like(image)
+module.loss(pixel = spy.call_id(),
+              resolution = res,
+              network = network,
+              reference = image,
+              _result = loss_output)
 
-    app.present()
+panels = [
+    ("Reference", image),
+    ("Inference", lr_output),
+    ("Loss", loss_output),
+]
+
+fig, axes = plt.subplots(1, len(panels), figsize=(4.0 * len(panels), 4.3), num="Inferencing Example")
+for ax, (name, tensor) in zip(axes, panels):
+    pixels = np.clip(np.abs(tensor.to_numpy()), 0, 1)
+    ax.imshow(pixels, interpolation="bilinear")
+    ax.set_title(name)
+    ax.set_axis_off()
+fig.tight_layout()
+plt.show()
 ```
 
 ## C++ Inferencing Overview

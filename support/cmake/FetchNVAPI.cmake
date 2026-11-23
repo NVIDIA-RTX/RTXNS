@@ -7,6 +7,16 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+if(TARGET nvapi)
+	# C++ inherits these includes through the target, but ShaderMake needs an explicit path.
+	if(NOT NVAPI_INCLUDE_DIR OR NOT EXISTS "${NVAPI_INCLUDE_DIR}/nvapi.h")
+		message(FATAL_ERROR "RTXNS: the existing nvapi target requires the parent to set NVAPI_INCLUDE_DIR "
+			"to the directory containing nvapi.h for shader compilation.")
+	endif()
+	message(STATUS "RTXNS: using the existing nvapi target (${NVAPI_INCLUDE_DIR})")
+	return()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/FetchArchive.cmake")
 
 if(NOT RTXNS_TARGET_ARCH)
@@ -37,7 +47,7 @@ if(RTXNS_NVAPI_ROOT)
 else()
 	# Downloaded as a source archive of the pinned commit (a few MB) rather than cloned with its history
 	# (>100 MB), into a versioned folder in the source tree that all build directories share.
-	set(_nvapi_root "${CMAKE_SOURCE_DIR}/external/nvapi-${RTXNS_NVAPI_VERSION}")
+	cmake_path(SET _nvapi_root NORMALIZE "${CMAKE_CURRENT_LIST_DIR}/../../external/nvapi-${RTXNS_NVAPI_VERSION}")
 	rtxns_fetch_archive(NVAPI "https://github.com/NVIDIA/nvapi/archive/${RTXNS_NVAPI_COMMIT}.zip" "${_nvapi_root}" "nvapi.h")
 endif()
 

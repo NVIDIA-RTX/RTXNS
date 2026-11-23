@@ -49,7 +49,6 @@ if (DONUT_WITH_DX12)
 	target_link_libraries(${project} donut_app donut_engine NeuralShading nvapi implot)
     add_dependencies(${project} dx12-agility-sdk ${project}_shaders)
     target_compile_definitions(
-		${project} PRIVATE DONUT_D3D_AGILITY_SDK_VERSION=${DONUT_D3D_AGILITY_SDK_VERSION}
 		${project} PRIVATE DONUT_D3D_AGILITY_PREVIEW_SDK_VERSION=${DONUT_D3D_AGILITY_PREVIEW_SDK_VERSION}
 	)
 else()

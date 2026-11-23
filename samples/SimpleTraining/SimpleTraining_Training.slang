@@ -11,10 +11,30 @@
 #include "NetworkConfig.h"
 #include <donut/shaders/binding_helpers.hlsli>
 
-import CooperativeVectorDerivatives;
 import CooperativeVectorFunctions;
 import Utils;
 import LinearOps;
+
+namespace rtxns
+{
+    // Hand-rolled backward pass (no bwd_diff) for this sample's manually-computed
+    // gradients; these formulas used to live in the now-removed CooperativeVectorDerivatives.slang.
+    CoopVec<T, K> leakyReLU_Derivative<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> p, T a, CoopVec<T, K> dResult)
+    {
+        [ForceUnroll]
+        for (int i = 0; i < K; ++i)
+        {
+            p[i] = p[i] > T(0.) ? dResult[i] : a * dResult[i];
+        }
+        return p;
+    }
+
+    CoopVec<T, K> sigmoid_Derivative<T : __BuiltinFloatingPointType, let K : int>(CoopVec<T, K> p, CoopVec<T, K> dResult)
+    {
+        var sigmoidOut = sigmoid(p);
+        return dResult * sigmoidOut * (CoopVec<T, K>(T(1.)) - sigmoidOut);
+    }
+}
 
 DECLARE_CBUFFER(NeuralConstants, gConst, 0, 0);
 ByteAddressBuffer gMLPParams                    :REGISTER_SRV(0, 0);

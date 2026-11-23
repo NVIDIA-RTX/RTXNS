@@ -14,7 +14,7 @@ When exploring RTXNS, it is assumed that the reader is already familiar with ML 
 
 ### General
 
-[CMake 3.24 or later][CMake] **|** [Slang 2026.10*](https://shader-slang.com/tools/)
+[CMake 3.24 or later][CMake] **|** [Slang 2026.20*](https://shader-slang.com/tools/)
 
 ### Windows
 
@@ -41,6 +41,15 @@ CMake detects the Vulkan SDK through the `VULKAN_SDK` environment variable set b
 ## Known Issues
 
 05/30/2025: When updating from v1.0.0 to v1.1.0, delete the CMake cache to avoid build errors.
+
+10/22/2026: Slang `2026.20` or newer is required. Earlier releases fail to compile the derivatives of the `CoopVec` operators for DirectX (`error E40030: function 'CoopVec.mul' never returns`, fixed by [shader-slang/slang#13456](https://github.com/shader-slang/slang/pull/13456)).
+
+10/22/2026: ShaderMake does not track the compiler version. After updating Slang or DXC, delete `bin/<platform>/<configuration>/shaders` (or build clean) so that the shaders are recompiled.
+
+10/22/2026: Slang `2026.20` still has the following autodiff issues, which can affect custom modules written against the SDK's `IDifferentiablePtrType` pattern:
+- A `[BackwardDerivative]` on the implementation of a `[Differentiable]` interface requirement is silently ignored when the method also carries `[TreatAsDifferentiable]` or `[Differentiable]`; the shader compiles and produces zero gradients ([shader-slang/slang#13301](https://github.com/shader-slang/slang/issues/13301)). Provide a `[ForwardDerivative]` as well, or mark the requirement `[MaybeDifferentiable]`.
+- A `[Differentiable]` method of a non-differentiable struct that passes an `IDifferentiablePtrType` member to a differentiable function crashes the compiler (`assert failure: slang-ir-autodiff-fwd.cpp: zeroMethod`) after warning `E31159`. Make the enclosing struct conform to `IDifferentiablePtrType`, as `TrainingMLP` and the SlangPy sample's `IModule` do.
+- The Slang bundled with SlangPy `0.43.1` (`2026.12`) cannot compile an empty struct used as an `IDifferentiablePtrType` differential (fixed in `2026.20` by [shader-slang/slang#13453](https://github.com/shader-slang/slang/pull/13453)), so parameter-less modules in the SlangPy training sample use a one-field placeholder differential.
 
 ## Project structure
 

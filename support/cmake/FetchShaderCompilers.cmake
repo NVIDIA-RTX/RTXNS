@@ -32,7 +32,26 @@ endif()
 set(SHADERMAKE_FIND_DXC OFF CACHE BOOL "Disabled: DXC is downloaded by support/cmake/FetchShaderCompilers.cmake" FORCE)
 set(SHADERMAKE_FIND_SLANG OFF CACHE BOOL "Disabled: Slang is downloaded by support/cmake/FetchShaderCompilers.cmake" FORCE)
 
-set(_rtxns_tools_dir "${CMAKE_SOURCE_DIR}/external")
+# This SDK's own external/ directory, also when the SDK is embedded in another project.
+cmake_path(SET _rtxns_tools_dir NORMALIZE "${CMAKE_CURRENT_LIST_DIR}/../../external")
+
+# Older builds cached SDK-selected paths as INTERNAL entries. Rediscover those
+# defaults after a version change, while preserving explicit compiler overrides.
+foreach(_compiler DXC SLANG)
+    set(_path_var "SHADERMAKE_${_compiler}_PATH")
+    get_property(_path_type CACHE "${_path_var}" PROPERTY TYPE)
+    get_property(_cached_path CACHE "${_path_var}" PROPERTY VALUE)
+    cmake_path(IS_PREFIX _rtxns_tools_dir "${_cached_path}" NORMALIZE _sdk_path)
+    if(_path_type STREQUAL "INTERNAL" AND _sdk_path AND "${${_path_var}}" STREQUAL "${_cached_path}")
+        unset(${_path_var} CACHE)
+    endif()
+    if(${_path_var})
+        if(NOT EXISTS "${${_path_var}}" OR IS_DIRECTORY "${${_path_var}}")
+            message(FATAL_ERROR "RTXNS: ${_path_var}='${${_path_var}}' is not a compiler executable.")
+        endif()
+        message(STATUS "RTXNS: using supplied ${_compiler} compiler ${${_path_var}}")
+    endif()
+endforeach()
 
 # ---- DXC (github.com/microsoft/DirectXShaderCompiler) ----
 # The Windows release archive contains x64, x86 and arm64 binaries; the Linux archive is x86_64 only.
@@ -47,14 +66,16 @@ elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND RTXNS_HOST_ARCH STREQUAL "x64
     set(_dxc_exe "bin/dxc")
 endif()
 
-if(_dxc_dir)
-    rtxns_fetch_archive(DXC
-        "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${SHADERMAKE_DXC_VERSION}/${_dxc_archive}"
-        "${_dxc_dir}" "${_dxc_exe}")
-    set(SHADERMAKE_DXC_PATH "${_dxc_dir}/${_dxc_exe}" CACHE INTERNAL "")
-else()
-    # No prebuilt DXC on GitHub for this host; ShaderMake falls back to the Vulkan SDK's dxc.
-    message(STATUS "RTXNS: no prebuilt DXC release for ${CMAKE_HOST_SYSTEM_NAME}/${RTXNS_HOST_ARCH}; using the Vulkan SDK's dxc if available")
+if(NOT SHADERMAKE_DXC_PATH)
+    if(_dxc_dir)
+        rtxns_fetch_archive(DXC
+            "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${SHADERMAKE_DXC_VERSION}/${_dxc_archive}"
+            "${_dxc_dir}" "${_dxc_exe}")
+        set(SHADERMAKE_DXC_PATH "${_dxc_dir}/${_dxc_exe}")
+    else()
+        # No prebuilt DXC on GitHub for this host; ShaderMake falls back to the Vulkan SDK's dxc.
+        message(STATUS "RTXNS: no prebuilt DXC release for ${CMAKE_HOST_SYSTEM_NAME}/${RTXNS_HOST_ARCH}; using the Vulkan SDK's dxc if available")
+    endif()
 endif()
 
 # ---- Slang (github.com/shader-slang/slang) ----
@@ -75,7 +96,23 @@ else()
 endif()
 set(_slang_dir "${_rtxns_tools_dir}/slang-${SHADERMAKE_SLANG_VERSION}-${_slang_os}-${_slang_cpu}")
 
-rtxns_fetch_archive(Slang
-    "https://github.com/shader-slang/slang/releases/download/v${SHADERMAKE_SLANG_VERSION}/slang-${SHADERMAKE_SLANG_VERSION}-${_slang_os}-${_slang_cpu}.zip"
-    "${_slang_dir}" "${_slang_exe}")
-set(SHADERMAKE_SLANG_PATH "${_slang_dir}/${_slang_exe}" CACHE INTERNAL "")
+if(NOT SHADERMAKE_SLANG_PATH)
+    rtxns_fetch_archive(Slang
+        "https://github.com/shader-slang/slang/releases/download/v${SHADERMAKE_SLANG_VERSION}/slang-${SHADERMAKE_SLANG_VERSION}-${_slang_os}-${_slang_cpu}.zip"
+        "${_slang_dir}" "${_slang_exe}")
+    set(SHADERMAKE_SLANG_PATH "${_slang_dir}/${_slang_exe}")
+
+    # Slang's -dxc-path does not reliably locate DXC. Prepare SDK-managed Slang
+    # packages here, including when this SDK is embedded. External Slang is untouched.
+    if(CMAKE_HOST_WIN32 AND SHADERMAKE_DXC_PATH)
+        cmake_path(GET SHADERMAKE_SLANG_PATH PARENT_PATH _slang_bin_dir)
+        foreach(_dll dxcompiler.dll dxil.dll)
+            cmake_path(REPLACE_FILENAME SHADERMAKE_DXC_PATH "${_dll}" OUTPUT_VARIABLE _dxc_dll)
+            if(NOT EXISTS "${_dxc_dll}")
+                message(FATAL_ERROR "RTXNS: DXC runtime '${_dxc_dll}' is required by SDK-managed Slang. "
+                    "Provide a complete DXC package or a prepared SHADERMAKE_SLANG_PATH.")
+            endif()
+            file(COPY_FILE "${_dxc_dll}" "${_slang_bin_dir}/${_dll}" ONLY_IF_DIFFERENT)
+        endforeach()
+    endif()
+endif()

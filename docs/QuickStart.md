@@ -27,7 +27,7 @@ RTX Neural Shading can be built and run on Windows and Linux.
    - `linux-debug`
    - `linux-release`
 
-   Each preset uses Ninja and writes its build tree to `build/<preset>`. The Windows presets also enable the DX12 Cooperative Vector preview. Ninja is a requirement of the supplied presets, not of the SDK itself; custom CMake builds can use Visual Studio or another supported generator.
+   Each preset uses Ninja and writes its build tree to `build/<preset>`. The Windows presets enable DX12. Ninja is a requirement of the supplied presets, not of the SDK itself; custom CMake builds can use Visual Studio or another supported generator.
 
    On Windows, Visual Studio and VS Code can select these presets and configure the compiler environment automatically. From a command line, use the Visual Studio Developer Command Prompt for the target:
 
@@ -45,7 +45,7 @@ RTX Neural Shading can be built and run on Windows and Linux.
    cmake --build build
    ```
 
-   To enable the DX12 Cooperative Vector preview in a custom Windows build, add `-DENABLE_DX12_COOP_VECTOR_PREVIEW=ON` when configuring.
+   DX12 defaults to enabled on Windows. Use `-DDONUT_WITH_DX12=OFF` to disable it, or `-DDONUT_WITH_DX12=ON` to enable it in an existing build directory. Vulkan requires the Vulkan SDK; at least one graphics API must be enabled.
 
    To generate a Visual Studio solution while retaining the architecture settings from a Windows preset, override the generator and use a separate build directory:
 
@@ -63,6 +63,20 @@ RTX Neural Shading can be built and run on Windows and Linux.
    ```
 
 5. Select the graphics API when launching a sample with `-dx12` or `-vk`, where supported.
+
+## Embedding in another CMake project
+
+Use `add_subdirectory()` to consume the SDK. Samples default to off when embedded, and existing Donut and ShaderMake targets are reused.
+
+The SDK respects the parent's `DONUT_WITH_DX12` setting. The legacy `ENABLE_DX12_COOP_VECTOR_PREVIEW` option has been removed; use `DONUT_WITH_DX12` to select DX12.
+
+For DX12 builds, the SDK also reuses existing `dx12-agility-sdk` and `nvapi` targets independently, creating either target when it is missing. A parent providing `dx12-agility-sdk` must expose `DONUT_D3D_AGILITY_PREVIEW_SDK_VERSION`, which `DeviceUtils.cpp` exports as the runtime SDK version. If only `DONUT_D3D_AGILITY_SDK_PATH` or `DONUT_D3D_AGILITY_SDK_URL` is supplied, the SDK uses that location to create its deployment target.
+
+When providing an `nvapi` target, the parent must also set `NVAPI_INCLUDE_DIR` to the directory containing `nvapi.h`. C++ inherits include paths through the target; ShaderMake needs this explicit path for shader compilation.
+
+When the parent provides ShaderMake, it also supplies the compiler setup. Otherwise, the SDK downloads missing DXC and Slang packages into its own `external/` directory and prepares the DXC runtime beside SDK-managed Slang on Windows. Set `SHADERMAKE_DXC_PATH` or `SHADERMAKE_SLANG_PATH` to use an existing compiler instead. An external Slang installation must already have its runtime dependencies available; the SDK leaves its directory untouched. An external Windows DXC package used with SDK-managed Slang must include `dxcompiler.dll` and `dxil.dll` beside `dxc.exe`.
+
+SDK-managed NVAPI downloads also stay in the SDK's `external/` directory. Cross-compilation builds host ShaderMake beneath the SDK's build directory. The `bin/slangc.bat` or `bin/slangc.sh` convenience launcher is only created by standalone builds.
 
 ## About
 
